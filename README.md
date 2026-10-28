@@ -5,26 +5,30 @@ rather not trust with your files, work on a directory:
 
 - **`fsfork`** forks a directory: it makes a copy-on-write clone of it, and
   prints where it is.
-- **`confine`** runs a command that may write only to one directory, and
-  cannot read secrets.
+- **`confine`** runs a command in a fork of the working directory, or in a
+  directory, that may write only there, and cannot read secrets.
 - **`fsdiff`** shows what changed in a fork since it was made, as a patch.
 
-Each does one thing, and none knows about the others. They keep no state:
+Each does one thing. `confine` forks as `fsfork` does, and `fsdiff` knows
+where a fork's base is; otherwise none knows about the others. They keep no
+state:
 a fork is a directory, its path is its name, and `ls`, `rm` and `git` do
 the rest.
 
 ## Usage
 
-Fork the directory, and run Claude Code in the fork, where it may write
-nothing else:
+Run Claude Code in a fork of the directory, where it may write nothing
+else:
 
 ```sh
 cd ~/src/turso
-confine -w ~/.claude -d $(fsfork) claude
+confine -w ~/.claude claude
 ```
 
-`fsfork` prints the fork's path, `~/src/turso.1`, which `confine` runs
-Claude Code in. `-w ~/.claude` lets it save its sessions and settings.
+`confine` forks the directory to `~/src/turso.1`, says so, and runs Claude
+Code in the fork. `-w ~/.claude` lets it save its sessions and settings.
+With `--rm`, the fork is removed when Claude Code exits; with `-d dir`,
+there is no fork, and Claude Code runs in `dir` itself.
 
 When it is done, see what it changed, apply the changes, and remove the
 fork:
@@ -102,13 +106,14 @@ outside the fork cannot bring that file into the patch.
 
 ## confine
 
-`confine` runs a command in the working directory, or the one given with
-`-d`, which the command may write to, along with temporary directories,
-devices, build and package manager caches (`~/.cargo`, `~/.rustup`,
-`~/.cache`, `~/.npm`, `~/Library/Caches`), and paths given with `-w`. It
-cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, or `~/.config/gh`. Everything
-else is allowed. `confine` then becomes the command, which exits with its
-own status.
+`confine` runs a command in a fork of the working directory, or in the
+directory given with `-d`, which the command may write to, along with
+temporary directories, devices, build and package manager caches
+(`~/.cargo`, `~/.rustup`, `~/.cache`, `~/.npm`, `~/Library/Caches`), and
+paths given with `-w`. It cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, or
+`~/.config/gh`. Everything else is allowed. `confine` then becomes the command, which exits with its
+own status; with `--rm`, it waits for the command instead, removes the
+fork, and exits as the command did.
 
 It sets `CLAUDE_CODE_SANDBOXED=1`, so that Claude Code trusts the directory
 without asking, which would write to `~/.claude.json`.

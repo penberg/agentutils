@@ -1,34 +1,53 @@
 .TH CONFINE 1 2026-10-28 "agentutils 0.1.0" "User Commands"
 .SH NAME
-confine \- run a command that may write only to a directory
+confine \- run a command that may write only to a fork of a directory
 .SH SYNOPSIS
 .B confine
 .RB [ \-w
 .IR path ]...
-.RB [ \-d
+.RB [ \-\-rm | \-d
 .IR dir ]
 .RI [ command
 .RI [ argument ...]]
 .SH DESCRIPTION
 .B confine
-runs
+forks the working directory, as
+.BR fsfork (1)
+does, next to it, named after it and the first number not taken
+.RB ( turso.1
+for
+.BR turso ),
+and runs
 .I command
-in
-.I dir
-(the working directory if not given),
-or your shell
+in the fork, or your shell
 .RB ( $SHELL ,
 or
 .B /bin/sh
 if it is not set) if no command is given, confined: the command may write
-only to
-.IR dir ,
-and may not read secrets.
-The processes it starts are confined the same way, and none can undo it.
+only to the fork, and may not read secrets.
+Given a directory with
+.BR \-d ,
+it runs the command in that directory, confined to it, and makes no fork.
+The processes the command starts are confined the same way, and none can
+undo it.
+.PP
+.B confine
+says where the fork is on standard error before it runs the command, and
+leaves it, for
+.BR fsdiff (1)
+to show what the command changed in it, unless the command could not be
+run, or
+.B \-\-rm
+is given.
 .PP
 .B confine
 does not stay: it becomes the command, which so exits as it would, with its
 own status, or by the signal that ended it.
+With
+.BR \-\-rm ,
+it waits for the command, ignoring the terminal's interrupt, quit and hangup
+signals, which reach the command too, removes the fork, and then exits as
+the command did.
 .PP
 Everything from
 .I command
@@ -38,20 +57,20 @@ passes
 .B \-\-resume
 to
 .BR claude .
-.PP
-.B confine
-knows nothing about forks: it confines a command to any directory.
-Together with
-.BR fsfork (1),
-the command changes only a fork of the directory, which
-.BR fsdiff (1)
-then shows the changes in.
 .SH OPTIONS
 .TP
 .BI \-d " dir" "\fR, \fP\-\-dir " dir
 Run the command in
 .I dir
-and let it write there, rather than in the working directory.
+itself, and let it write there, rather than in a fork of the working
+directory.
+.TP
+.B \-\-rm
+Remove the fork, and its base, when the command exits, as if it had never
+been made.
+It cannot be given with
+.BR \-d ,
+as there is no fork to remove.
 .TP
 .BI \-w " path" "\fR, \fP\-\-write " path
 Let the command write to
@@ -65,7 +84,7 @@ lets Claude Code save its sessions and settings.
 Everything but:
 .TP
 Writing
-Only
+Only the fork, or
 .IR dir ,
 the temporary directories
 .RB ( /tmp
@@ -100,19 +119,18 @@ sets
 .B CLAUDE_CODE_SANDBOXED
 to
 .B 1
-for the command, so that Claude Code trusts
-.I dir
-without asking: it would otherwise ask in every new directory, and
+for the command, so that Claude Code trusts the directory without asking:
+it would otherwise ask in every new directory, and
 accepting would write to
 .IR ~/.claude.json ,
 which it may not.
 .SH EXIT STATUS
-The command's, as it becomes the command.
+The command's, as it becomes the command, or exits as it did.
 If it cannot run the command,
 .B confine
 exits with 127 if the command was not found and 126 otherwise, as
 .BR env (1)
-does, and with 1 if
+does, and with 1 if the working directory cannot be forked, or if
 .I dir
 or a path given with
 .B \-w
@@ -121,13 +139,20 @@ does not exist.
 Run Claude Code in a fork of the working directory:
 .PP
 .RS
-.B confine \-w ~/.claude \-d $(fsfork) claude
+.B confine \-w ~/.claude claude
 .RE
 .PP
-Run a shell that may write only to the working directory:
+Run the tests in a fork that is removed after them, so that they cannot
+change the working directory:
 .PP
 .RS
-.B confine
+.B confine \-\-rm make test
+.RE
+.PP
+Run a shell that may write only to the working directory itself:
+.PP
+.RS
+.B confine \-d .
 .RE
 .SH CAVEATS
 On macOS, the command runs under Seatbelt, through
@@ -141,6 +166,13 @@ fails rather than run the command unconfined.
 The command cannot run set-user-ID programs such as
 .BR sudo (8)
 on Linux.
+.PP
+With
+.BR \-\-rm ,
+the fork is left if
+.B confine
+is killed, by a signal other than those it ignores, before the command
+exits.
 .PP
 The network is not confined: a command can send anything it can read to
 anywhere, and can push to remotes whose credentials it can reach, such as

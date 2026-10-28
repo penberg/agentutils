@@ -1,6 +1,7 @@
-//! `confine` runs a command confined to a directory: the command may write
-//! there, to temporary directories, and to caches, but nowhere else, and may
-//! not read secrets such as SSH keys.
+//! `confine` runs a command confined to a directory, a fork of the working
+//! directory unless it is given one: the command may write there, to
+//! temporary directories, and to caches, but nowhere else, and may not read
+//! secrets such as SSH keys.
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -17,9 +18,9 @@ compile_error!("confine runs only on macOS and Linux for now");
 
 use std::{
     env, io,
-    os::unix::process::CommandExt,
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
-    process::ExitCode,
+    process::{ExitCode, ExitStatus},
 };
 
 use argh::FromArgs;
@@ -31,28 +32,50 @@ const CACHES: &[&str] = &[".cargo", ".rustup", ".cache", ".npm", "Library/Caches
 /// Directories under the home directory that the command may not read.
 const SECRETS: &[&str] = &[".ssh", ".aws", ".gnupg", ".config/gh"];
 
-/// Run a command that may write only to a directory, temporary directories
-/// and caches, and may not read secrets.
+/// The terminal's signals, which reach the command too, and which `confine`
+/// outlives, with `--rm`, to remove the fork.
+const SIGNALS: [i32; 3] = [libc::SIGINT, libc::SIGQUIT, libc::SIGHUP];
+
+/// Run a command in a fork of the working directory, or in a directory, that
+/// may write only there, to temporary directories and caches, and may not
+/// read secrets.
 #[derive(FromArgs)]
 struct Args {
     /// another path the command may write to; can be repeated
     #[argh(option, short = 'w')]
     write: Vec<PathBuf>,
 
-    /// the directory the command runs in and may write to; the working
-    /// directory if not given
-    #[argh(option, short = 'd', default = "PathBuf::from(\".\")")]
-    dir: PathBuf,
+    /// the directory the command runs in and may write to, rather than a
+    /// fork of the working directory
+    #[argh(option, short = 'd')]
+    dir: Option<PathBuf>,
+
+    /// remove the fork when the command exits
+    #[argh(switch)]
+    rm: bool,
 
     /// the command to run and its arguments; the shell if none
     #[argh(positional, greedy)]
     command: Vec<String>,
 }
 
+/// What became of the command.
+enum Ran {
+    /// It ran, and exited with this status.
+    Exited(ExitStatus),
+    /// It could not be run, for this reason.
+    Failed(io::Error),
+}
+
 fn main() -> ExitCode {
     let args: Args = argh::from_env();
+    if args.rm && args.dir.is_some() {
+        eprintln!("confine: --rm removes a fork, and -d runs the command without one");
+        return ExitCode::FAILURE;
+    }
     let e = match confine(&args) {
-        Ok(e) => e,
+        Ok(Ran::Exited(status)) => return exit_as(status),
+        Ok(Ran::Failed(e)) => e,
         Err(e) => {
             eprintln!("confine: {e}");
             return ExitCode::FAILURE;
@@ -68,17 +91,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs the command `args` give in its directory, confined to it, in place of
-/// this process. Returns only if it cannot: with why the command could not be
-/// run, or with an error from before it was tried.
-fn confine(args: &Args) -> io::Result<io::Error> {
-    let dir = args.dir.canonicalize().map_err(|e| at(&args.dir, e))?;
-    if !dir.is_dir() {
-        return Err(io::Error::other(format!(
-            "{}: not a directory",
-            dir.display()
-        )));
-    }
+/// Runs the command `args` give confined to its directory, or to a fork of
+/// the working directory. The fork is removed if the command could not be
+/// run, or with `--rm`, after it exits.
+fn confine(args: &Args) -> io::Result<Ran> {
     let home = dirs::home_dir().ok_or_else(|| io::Error::other("no home directory"))?;
     let mut writable = vec![PathBuf::from("/tmp"), env::temp_dir()];
     writable.extend(CACHES.iter().map(|cache| home.join(cache)));
@@ -99,11 +115,72 @@ fn confine(args: &Args) -> io::Result<io::Error> {
     } else {
         args.command.clone()
     };
-    let mut confined = os::confine(&command, &dir, &writable, &hidden)?;
+    if let Some(dir) = &args.dir {
+        let dir = dir.canonicalize().map_err(|e| at(dir, e))?;
+        if !dir.is_dir() {
+            return Err(io::Error::other(format!(
+                "{}: not a directory",
+                dir.display()
+            )));
+        }
+        return run(&command, &dir, &writable, &hidden, false);
+    }
+    let fork = fsfork::fork(Path::new("."))?;
+    eprintln!("confine: forked to {}", fork.display());
+    let ran = run(&command, &fork, &writable, &hidden, args.rm);
+    if (args.rm || !matches!(ran, Ok(Ran::Exited(_))))
+        && let Err(e) = fsfork::remove(&fork)
+    {
+        eprintln!("confine: {e}");
+    }
+    ran
+}
+
+/// Runs `command` in `dir`, confined to it: in place of this process, or,
+/// to `wait` for it, as a child.
+fn run(
+    command: &[String],
+    dir: &Path,
+    writable: &[PathBuf],
+    hidden: &[PathBuf],
+    wait: bool,
+) -> io::Result<Ran> {
+    let mut confined = os::confine(command, dir, writable, hidden)?;
     // Claude Code would otherwise ask whether to trust every new directory,
     // and accepting would write to `~/.claude.json`, which it may not.
-    confined.current_dir(&dir).env("CLAUDE_CODE_SANDBOXED", "1");
-    Ok(confined.exec())
+    confined.current_dir(dir).env("CLAUDE_CODE_SANDBOXED", "1");
+    if !wait {
+        return Ok(Ran::Failed(confined.exec()));
+    }
+    for signal in SIGNALS {
+        unsafe { libc::signal(signal, libc::SIG_IGN) };
+    }
+    // The command gets the terminal's signals as they are by default.
+    unsafe {
+        confined.pre_exec(|| {
+            for signal in SIGNALS {
+                libc::signal(signal, libc::SIG_DFL);
+            }
+            Ok(())
+        });
+    }
+    Ok(match confined.status() {
+        Ok(status) => Ran::Exited(status),
+        Err(e) => Ran::Failed(e),
+    })
+}
+
+/// Exits as `status` says the command did: with its code, or by the signal
+/// that ended it.
+fn exit_as(status: ExitStatus) -> ExitCode {
+    if let Some(signal) = status.signal() {
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+            libc::raise(signal);
+        }
+        return ExitCode::from(128 + signal as u8);
+    }
+    ExitCode::from(status.code().unwrap_or(1) as u8)
 }
 
 /// `e`, saying it is about `path`.

@@ -68,13 +68,53 @@ fn runs_the_command_in_the_directory() {
 }
 
 #[test]
-fn runs_the_command_in_the_working_directory_by_default() {
+fn runs_the_command_in_a_fork_of_the_working_directory() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
-    let out = world.confine(&dir, &["pwd"]);
+    write(&dir, "a", "a\n");
+    let out = world.confine(&dir, &["sh", "-c", "pwd && cat a && echo b > b"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), format!("{}\n", dir.display()));
+    let fork = world.dir.join("project.1");
+    assert_eq!(stdout(&out), format!("{}\na\n", fork.display()));
+    assert!(stderr(&out).contains(&format!("forked to {}", fork.display())));
+    assert_eq!(read(&fork, "b"), "b\n");
+    assert!(!dir.join("b").exists());
+    assert!(world.dir.join(".project.1.base").is_dir());
+}
+
+#[test]
+fn the_command_in_a_fork_cannot_write_to_the_directory() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.dir("project");
+    let out = world.confine(
+        &dir,
+        &["sh", "-c", "echo x > \"$1/f\"", "sh", dir.to_str().unwrap()],
+    );
+    assert!(!out.status.success());
+    assert!(!dir.join("f").exists());
+}
+
+#[test]
+fn removes_the_fork_after_the_command_with_rm() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.dir("project");
+    let out = world.confine(&dir, &["--rm", "sh", "-c", "echo x > f; exit 7"]);
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    let out = world.confine(&dir, &["--rm", "sh", "-c", "kill -TERM $$"]);
+    assert_eq!(out.status.signal(), Some(libc::SIGTERM));
+    assert_no_forks(&world);
+}
+
+#[test]
+fn rm_cannot_be_given_with_d() {
+    let world = World::new();
+    let dir = world.dir("project");
+    assert_fails(&world.confine(&dir, &["--rm", "-d", ".", "true"]), "--rm");
+    assert!(dir.is_dir());
+    assert_no_forks(&world);
 }
 
 #[test]
@@ -96,7 +136,7 @@ fn runs_the_shell_without_a_command() {
         .unwrap();
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
-    assert_eq!(read(&dir, "f"), "shell\n");
+    assert_eq!(read(&world.dir.join("project.1"), "f"), "shell\n");
 }
 
 #[test]
@@ -211,6 +251,7 @@ fn fails_for_paths_that_do_not_exist() {
         &world.confine(&dir, &["-d", "file", "true"]),
         "not a directory",
     );
+    assert_no_forks(&world);
 }
 
 /// Whether `sandbox-exec` can run here.
@@ -296,9 +337,9 @@ impl World {
         self.confine_command(cwd, args).output().unwrap()
     }
 
-    /// Runs `cmd` with `sh -c`, confined to `dir`, which must succeed.
+    /// Runs `cmd` with `sh -c`, confined to `dir` itself, which must succeed.
     fn sh(&self, dir: &Path, cmd: &str) {
-        let out = self.confine(dir, &["sh", "-c", cmd]);
+        let out = self.confine(dir, &["-d", ".", "sh", "-c", cmd]);
         assert!(out.status.success(), "{cmd}: {}", stderr(&out));
     }
 }
@@ -330,6 +371,20 @@ fn stdout(out: &Output) -> String {
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Asserts that `world` has no forks, nor bases, of its directories.
+#[track_caller]
+fn assert_no_forks(world: &World) {
+    for entry in fs::read_dir(&world.dir).unwrap() {
+        let name = entry.unwrap().file_name();
+        let name = name.to_string_lossy();
+        assert!(
+            !name.contains('.'),
+            "{name} left in {}",
+            world.dir.display()
+        );
+    }
 }
 
 /// Asserts that `out` is of a command that failed with status 1, saying

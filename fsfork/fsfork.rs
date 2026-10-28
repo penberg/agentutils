@@ -53,6 +53,14 @@ pub fn fork_to(dir: &Path, fork: &Path) -> io::Result<PathBuf> {
     Ok(fork)
 }
 
+/// Removes `fork` and its base, both even if one cannot be.
+pub fn remove(fork: &Path) -> io::Result<()> {
+    let base = base_of(fork);
+    let removed = fs::remove_dir_all(fork).map_err(|e| at(fork, e));
+    let base_removed = fs::remove_dir_all(&base).map_err(|e| at(&base, e));
+    removed.and(base_removed)
+}
+
 /// The base of `fork`: `.<name>.base` next to it.
 pub fn base_of(fork: &Path) -> PathBuf {
     let mut name = OsString::from(".");

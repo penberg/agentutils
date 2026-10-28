@@ -29,7 +29,7 @@ Sleep 1s
 Show
 
 # record.sh speeds this up from here...
-Type `confine -w ~/.claude -d $(fsfork) claude "Add a --top N flag to wordfreq.py"` Sleep 300ms Enter
+Type `confine -w ~/.claude claude "Add a --top N flag to wordfreq.py"` Sleep 300ms Enter
 Wait+Screen@5m /· done/
 # ...to here. What follows must last TAIL seconds in record.sh.
 Sleep 2s
