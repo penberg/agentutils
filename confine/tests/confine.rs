@@ -34,7 +34,7 @@ fn exits_with_the_commands_status() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
-    let out = world.confine(&dir, &[".", "sh", "-c", "exit 7"]);
+    let out = world.confine(&dir, &["sh", "-c", "exit 7"]);
     assert_eq!(out.status.code(), Some(7));
 }
 
@@ -43,7 +43,7 @@ fn is_ended_by_the_signal_that_ended_the_command() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
-    let out = world.confine(&dir, &[".", "sh", "-c", "kill -TERM $$"]);
+    let out = world.confine(&dir, &["sh", "-c", "kill -TERM $$"]);
     assert_eq!(out.status.signal(), Some(libc::SIGTERM));
 }
 
@@ -52,7 +52,7 @@ fn passes_everything_from_the_command_on_to_it() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
-    let out = world.confine(&dir, &[".", "echo", "--resume", "-w", "x"]);
+    let out = world.confine(&dir, &["echo", "--resume", "-w", "x"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "--resume -w x\n");
 }
@@ -62,7 +62,17 @@ fn runs_the_command_in_the_directory() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
-    let out = world.confine(&world.dir, &["project", "pwd"]);
+    let out = world.confine(&world.dir, &["-d", "project", "pwd"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{}\n", dir.display()));
+}
+
+#[test]
+fn runs_the_command_in_the_working_directory_by_default() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.dir("project");
+    let out = world.confine(&dir, &["pwd"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), format!("{}\n", dir.display()));
 }
@@ -73,7 +83,7 @@ fn runs_the_shell_without_a_command() {
     let world = World::new();
     let dir = world.dir("project");
     let mut child = world
-        .confine_command(&dir, &["."])
+        .confine_command(&dir, &[])
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -104,14 +114,7 @@ fn the_command_writes_only_to_the_directory() {
     ] {
         let out = world.confine(
             &dir,
-            &[
-                ".",
-                "sh",
-                "-c",
-                "echo x > \"$1\"",
-                "sh",
-                path.to_str().unwrap(),
-            ],
+            &["sh", "-c", "echo x > \"$1\"", "sh", path.to_str().unwrap()],
         );
         assert!(!out.status.success(), "wrote {}", path.display());
         assert!(!path.exists());
@@ -133,7 +136,6 @@ fn the_command_writes_to_paths_given_with_w() {
             claude.to_str().unwrap(),
             "--write",
             other.to_str().unwrap(),
-            ".",
             "sh",
             "-c",
             "mkdir \"$1/sessions\" && echo x > \"$1/sessions/s\" && echo y > \"$2/y\"",
@@ -176,15 +178,12 @@ fn the_command_cannot_read_secrets() {
         ".config/gh/hosts.yml",
     ] {
         write(&home, secret, "secret\n");
-        let out = world.confine(&dir, &[".", "cat", home.join(secret).to_str().unwrap()]);
+        let out = world.confine(&dir, &["cat", home.join(secret).to_str().unwrap()]);
         assert!(!out.status.success(), "read {secret}");
         assert!(!stdout(&out).contains("secret"));
     }
     write(&home, ".config/other", "readable\n");
-    let out = world.confine(
-        &dir,
-        &[".", "cat", home.join(".config/other").to_str().unwrap()],
-    );
+    let out = world.confine(&dir, &["cat", home.join(".config/other").to_str().unwrap()]);
     assert_eq!(stdout(&out), "readable\n");
 }
 
@@ -193,7 +192,7 @@ fn tells_claude_code_it_is_sandboxed() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
-    let out = world.confine(&dir, &[".", "sh", "-c", "echo $CLAUDE_CODE_SANDBOXED"]);
+    let out = world.confine(&dir, &["sh", "-c", "echo $CLAUDE_CODE_SANDBOXED"]);
     assert_eq!(stdout(&out), "1\n");
 }
 
@@ -202,13 +201,16 @@ fn fails_for_paths_that_do_not_exist() {
     let world = World::new();
     let dir = world.dir("project");
     let missing = world.home().join("missing");
-    assert_fails(&world.confine(&dir, &["missing", "true"]), "missing");
+    assert_fails(&world.confine(&dir, &["-d", "missing", "true"]), "missing");
     assert_fails(
-        &world.confine(&dir, &["-w", missing.to_str().unwrap(), ".", "true"]),
+        &world.confine(&dir, &["-w", missing.to_str().unwrap(), "true"]),
         "missing",
     );
     write(&dir, "file", "");
-    assert_fails(&world.confine(&dir, &["file", "true"]), "not a directory");
+    assert_fails(
+        &world.confine(&dir, &["-d", "file", "true"]),
+        "not a directory",
+    );
 }
 
 /// Whether `sandbox-exec` can run here.
@@ -296,7 +298,7 @@ impl World {
 
     /// Runs `cmd` with `sh -c`, confined to `dir`, which must succeed.
     fn sh(&self, dir: &Path, cmd: &str) {
-        let out = self.confine(dir, &[".", "sh", "-c", cmd]);
+        let out = self.confine(dir, &["sh", "-c", cmd]);
         assert!(out.status.success(), "{cmd}: {}", stderr(&out));
     }
 }

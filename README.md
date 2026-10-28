@@ -20,7 +20,7 @@ nothing else:
 
 ```sh
 cd ~/src/turso
-confine -w ~/.claude $(fsfork) claude
+confine -w ~/.claude -d $(fsfork) claude
 ```
 
 `fsfork` prints the fork's path, `~/src/turso.1`, which `confine` runs
@@ -102,12 +102,13 @@ outside the fork cannot bring that file into the patch.
 
 ## confine
 
-`confine` runs a command in a directory, which the command may write to,
-along with temporary directories, devices, build and package manager caches
-(`~/.cargo`, `~/.rustup`, `~/.cache`, `~/.npm`, `~/Library/Caches`), and
-paths given with `-w`. It cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, or
-`~/.config/gh`. Everything else is allowed. `confine` then becomes the
-command, which exits with its own status.
+`confine` runs a command in the working directory, or the one given with
+`-d`, which the command may write to, along with temporary directories,
+devices, build and package manager caches (`~/.cargo`, `~/.rustup`,
+`~/.cache`, `~/.npm`, `~/Library/Caches`), and paths given with `-w`. It
+cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, or `~/.config/gh`. Everything
+else is allowed. `confine` then becomes the command, which exits with its
+own status.
 
 It sets `CLAUDE_CODE_SANDBOXED=1`, so that Claude Code trusts the directory
 without asking, which would write to `~/.claude.json`.

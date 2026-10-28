@@ -5,7 +5,8 @@ confine \- run a command that may write only to a directory
 .B confine
 .RB [ \-w
 .IR path ]...
-.I dir
+.RB [ \-d
+.IR dir ]
 .RI [ command
 .RI [ argument ...]]
 .SH DESCRIPTION
@@ -13,7 +14,8 @@ confine \- run a command that may write only to a directory
 runs
 .I command
 in
-.IR dir ,
+.I dir
+(the working directory if not given),
 or your shell
 .RB ( $SHELL ,
 or
@@ -31,7 +33,7 @@ own status, or by the signal that ended it.
 Everything from
 .I command
 on belongs to the command, its own options included, so
-.B confine . claude \-\-resume
+.B confine claude \-\-resume
 passes
 .B \-\-resume
 to
@@ -46,13 +48,18 @@ the command changes only a fork of the directory, which
 then shows the changes in.
 .SH OPTIONS
 .TP
+.BI \-d " dir" "\fR, \fP\-\-dir " dir
+Run the command in
+.I dir
+and let it write there, rather than in the working directory.
+.TP
 .BI \-w " path" "\fR, \fP\-\-write " path
 Let the command write to
 .I path
 too, and to everything under it.
 Can be repeated.
 Commands that keep state in the home directory need it: for example,
-.B confine \-w ~/.claude . claude
+.B confine \-w ~/.claude claude
 lets Claude Code save its sessions and settings.
 .SH WHAT THE COMMAND MAY DO
 Everything but:
@@ -114,13 +121,13 @@ does not exist.
 Run Claude Code in a fork of the working directory:
 .PP
 .RS
-.B confine \-w ~/.claude $(fsfork) claude
+.B confine \-w ~/.claude \-d $(fsfork) claude
 .RE
 .PP
 Run a shell that may write only to the working directory:
 .PP
 .RS
-.B confine .
+.B confine
 .RE
 .SH CAVEATS
 On macOS, the command runs under Seatbelt, through

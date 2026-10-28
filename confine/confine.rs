@@ -39,8 +39,9 @@ struct Args {
     #[argh(option, short = 'w')]
     write: Vec<PathBuf>,
 
-    /// the directory the command runs in and may write to
-    #[argh(positional)]
+    /// the directory the command runs in and may write to; the working
+    /// directory if not given
+    #[argh(option, short = 'd', default = "PathBuf::from(\".\")")]
     dir: PathBuf,
 
     /// the command to run and its arguments; the shell if none
