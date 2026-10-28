@@ -1,15 +1,13 @@
-[package]
-name = "hmm"
+[workspace]
+members = ["confine", "fsdiff", "fsfork"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Run a command in a workspace: a copy of the working directory it may write to"
 license = "MIT"
 
-[[bin]]
-name = "hmm"
-path = "main.rs"
-
-[dependencies]
+[workspace.dependencies]
 argh = "0.1.19"
 libc = "0.2.189"
 dirs = "7.0.0"

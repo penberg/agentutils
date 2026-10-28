@@ -1,0 +1,110 @@
+.TH FSFORK 1 2026-10-28 "agentutils 0.1.0" "User Commands"
+.SH NAME
+fsfork \- fork a directory: make a copy-on-write clone of it
+.SH SYNOPSIS
+.B fsfork
+.RI [ dir
+.RI [ fork ]]
+.SH DESCRIPTION
+.B fsfork
+makes a copy-on-write clone of
+.IR dir ,
+or of the working directory if none is given: the fork.
+It prints the fork's path, and nothing else, so that
+.B cd $(fsfork)
+goes there.
+.PP
+The fork is everything in the directory, as it is: hidden files, the git
+repository, uncommitted changes, and build output, so builds in the fork
+start warm.
+Making it is quick, and it takes no space until either it or the directory
+is written to.
+From then on, the two are separate: what changes in one does not change in
+the other.
+.PP
+The fork goes in
+.IR fork ,
+which must not exist, or, if none is given, next to the directory, named
+after it and the first number whose fork and base are both free:
+.B fsfork
+in
+.I ~/src/turso
+makes
+.IR ~/src/turso.1 ,
+then
+.IR ~/src/turso.2 ,
+and so on.
+.PP
+.B fsfork
+also makes the fork's base: another clone of the directory, next to the
+fork and named after it,
+.I .turso.1.base
+for
+.IR turso.1 ,
+which keeps what the directory was when it was forked.
+.BR fsdiff (1)
+compares the fork with it, to show what changed in the fork, and only
+there.
+The fork is cloned from the base, so that the two are the same whatever
+changes in the directory meanwhile.
+.PP
+.B fsfork
+keeps no other record of its forks: a fork is a directory, and
+.BR ls (1)
+lists them,
+.BR rm (1)
+removes them.
+Remove a fork's base with it, or its number stays taken.
+.PP
+.B fsfork
+knows nothing about git, or what is in the directory: it forks exactly
+.IR dir .
+In a subdirectory of a repository, it forks the subdirectory.
+.SH EXIT STATUS
+0 if the directory was forked, and 1 otherwise, having made neither the
+fork nor the base.
+.SH EXAMPLES
+Fork the working directory, and go there:
+.PP
+.RS
+.B cd $(fsfork)
+.RE
+.PP
+Fork
+.I turso
+to
+.IR parser ,
+with its base in
+.IR .parser.base :
+.PP
+.RS
+.B fsfork turso parser
+.RE
+.PP
+List the forks of
+.IR turso ,
+and remove one:
+.PP
+.RS
+.nf
+.B ls \-d turso.*
+.B rm \-rf turso.1 .turso.1.base
+.fi
+.RE
+.SH CAVEATS
+On macOS, the fork is made with
+.BR clonefile (2),
+which needs APFS, and the fork on the same volume as the directory.
+On Linux, it is made with
+.B cp \-\-reflink=auto
+and takes no space only on a file system that can share blocks between
+files, such as Btrfs or XFS; elsewhere, it is a full copy.
+.PP
+Hard links in the directory are not hard links in the fork.
+.PP
+The fork is at another path than the directory, so tools that remember
+absolute paths, such as build caches, may rebuild in it.
+.SH SEE ALSO
+.BR confine (1),
+.BR fsdiff (1),
+.BR clonefile (2)

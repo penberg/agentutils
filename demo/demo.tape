@@ -1,4 +1,4 @@
-# Records Claude Code committing in a workspace, and hmm merging the commit.
+# Records Claude Code changing a fork, and fsdiff applying the change.
 #
 #   demo/record.sh
 #
@@ -7,7 +7,9 @@
 
 Output demo/frames/
 
-Require hmm
+Require fsfork
+Require confine
+Require fsdiff
 Require claude
 
 Set Shell zsh
@@ -20,14 +22,14 @@ Set TypingSpeed 25ms
 Set CursorBlink false
 
 Hide
-Type "./demo/setup.sh /tmp/wordfreq && cd /tmp/wordfreq" Enter
+Type "./demo/setup.sh ~/wordfreq && cd ~/wordfreq" Enter
 Type "unset CLAUDECODE $(env | grep -o '^CLAUDE_CODE_[A-Z_]*')" Enter
 Type "export PS1='%F{magenta}wordfreq%f $ ' && clear" Enter
 Sleep 1s
 Show
 
 # record.sh speeds this up from here...
-Type `hmm run -n top -w ~/.claude claude "Add a --top N flag to wordfreq.py and commit"` Sleep 300ms Enter
+Type `confine -w ~/.claude $(fsfork) claude "Add a --top N flag to wordfreq.py"` Sleep 300ms Enter
 Wait+Screen@5m /· done/
 # ...to here. What follows must last TAIL seconds in record.sh.
 Sleep 2s
@@ -39,7 +41,7 @@ Type "clear" Enter
 Sleep 300ms
 Show
 
-Type "hmm merge top" Sleep 200ms Enter
+Type "fsdiff --stat ../wordfreq.1" Sleep 200ms Enter
 Sleep 1.2s
-Type "git log --oneline" Sleep 200ms Enter
+Type "fsdiff ../wordfreq.1 | git apply && git status --short" Sleep 200ms Enter
 Sleep 2.5s

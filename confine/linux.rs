@@ -1,5 +1,4 @@
-//! Linux: a directory is forked with `cp --reflink`, and a command is
-//! confined with Landlock.
+//! Linux: a command is confined with Landlock.
 
 use std::{
     ffi::CString,
@@ -12,24 +11,6 @@ use std::{
     process::Command,
     ptr,
 };
-
-/// Clones the directory tree at `from` to `to`, which must not exist yet.
-/// The clone shares its blocks with the original until either is written, on
-/// file systems that can share them (Btrfs, XFS, and others), and is a copy on
-/// the rest.
-pub fn clone(from: &Path, to: &Path) -> io::Result<()> {
-    let out = Command::new("cp")
-        .args(["-a", "--reflink=auto", "--no-target-directory", "--"])
-        .arg(from)
-        .arg(to)
-        .output()?;
-    if !out.status.success() {
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    Ok(())
-}
 
 // Access rights, from `<linux/landlock.h>`. Those after `MAKE_SYM` came in
 // later versions of Landlock's ABI: `REFER` in 2 and `TRUNCATE` in 3.
@@ -90,7 +71,7 @@ struct PathBeneathAttr {
 
 /// A command that runs `command` under Landlock: it may write only under
 /// `writable` and to devices, and may not read or write anything under
-/// `hidden` except `clone`, which it may read and write. Everything else, the
+/// `hidden` except `dir`, which it may read and write. Everything else, the
 /// network included, is allowed.
 ///
 /// Landlock only grants rights, to a file and everything under it, so the
@@ -100,7 +81,7 @@ struct PathBeneathAttr {
 /// rights to the file a path resolves to.
 pub fn confine(
     command: &[String],
-    clone: &Path,
+    dir: &Path,
     writable: &[PathBuf],
     hidden: &[PathBuf],
 ) -> io::Result<Command> {
@@ -114,7 +95,7 @@ pub fn confine(
     };
     if abi < MIN_ABI {
         return Err(io::Error::other(
-            "the sandbox needs Landlock, in Linux 5.19 or later, enabled",
+            "confine needs Landlock, in Linux 5.19 or later, enabled",
         ));
     }
     let mut handled = READ | WRITE;
@@ -145,7 +126,7 @@ pub fn confine(
     for path in writable {
         ruleset.allow_except_hidden(path, WRITE)?;
     }
-    ruleset.allow(clone, READ | WRITE)?;
+    ruleset.allow(dir, READ | WRITE)?;
     let fd = ruleset.fd;
     let mut confined = Command::new(&command[0]);
     confined.args(&command[1..]);

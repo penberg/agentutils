@@ -1,0 +1,145 @@
+.TH CONFINE 1 2026-10-28 "agentutils 0.1.0" "User Commands"
+.SH NAME
+confine \- run a command that may write only to a directory
+.SH SYNOPSIS
+.B confine
+.RB [ \-w
+.IR path ]...
+.I dir
+.RI [ command
+.RI [ argument ...]]
+.SH DESCRIPTION
+.B confine
+runs
+.I command
+in
+.IR dir ,
+or your shell
+.RB ( $SHELL ,
+or
+.B /bin/sh
+if it is not set) if no command is given, confined: the command may write
+only to
+.IR dir ,
+and may not read secrets.
+The processes it starts are confined the same way, and none can undo it.
+.PP
+.B confine
+does not stay: it becomes the command, which so exits as it would, with its
+own status, or by the signal that ended it.
+.PP
+Everything from
+.I command
+on belongs to the command, its own options included, so
+.B confine . claude \-\-resume
+passes
+.B \-\-resume
+to
+.BR claude .
+.PP
+.B confine
+knows nothing about forks: it confines a command to any directory.
+Together with
+.BR fsfork (1),
+the command changes only a fork of the directory, which
+.BR fsdiff (1)
+then shows the changes in.
+.SH OPTIONS
+.TP
+.BI \-w " path" "\fR, \fP\-\-write " path
+Let the command write to
+.I path
+too, and to everything under it.
+Can be repeated.
+Commands that keep state in the home directory need it: for example,
+.B confine \-w ~/.claude . claude
+lets Claude Code save its sessions and settings.
+.SH WHAT THE COMMAND MAY DO
+Everything but:
+.TP
+Writing
+Only
+.IR dir ,
+the temporary directories
+.RB ( /tmp
+and
+.BR $TMPDIR ),
+devices, the caches that builds and package managers write to
+.RB ( ~/.cargo ,
+.BR ~/.rustup ,
+.BR ~/.cache ,
+.B ~/.npm
+and
+.BR ~/Library/Caches ),
+and the paths given with
+.B \-w
+may be written to.
+.TP
+Reading
+The contents of
+.BR ~/.ssh ,
+.BR ~/.aws ,
+.B ~/.gnupg
+and
+.B ~/.config/gh
+cannot be read.
+On Linux, their files can still be listed, and files made in the
+directories above them after the command starts cannot be read.
+.PP
+The network and the GPU are not confined.
+.SH ENVIRONMENT
+.B confine
+sets
+.B CLAUDE_CODE_SANDBOXED
+to
+.B 1
+for the command, so that Claude Code trusts
+.I dir
+without asking: it would otherwise ask in every new directory, and
+accepting would write to
+.IR ~/.claude.json ,
+which it may not.
+.SH EXIT STATUS
+The command's, as it becomes the command.
+If it cannot run the command,
+.B confine
+exits with 127 if the command was not found and 126 otherwise, as
+.BR env (1)
+does, and with 1 if
+.I dir
+or a path given with
+.B \-w
+does not exist.
+.SH EXAMPLES
+Run Claude Code in a fork of the working directory:
+.PP
+.RS
+.B confine \-w ~/.claude $(fsfork) claude
+.RE
+.PP
+Run a shell that may write only to the working directory:
+.PP
+.RS
+.B confine .
+.RE
+.SH CAVEATS
+On macOS, the command runs under Seatbelt, through
+.BR sandbox\-exec (1),
+which cannot run inside another sandbox, so a confined command cannot
+confine another.
+On Linux, it runs under Landlock, which needs Linux 5.19 or later; without
+it,
+.B confine
+fails rather than run the command unconfined.
+The command cannot run set-user-ID programs such as
+.BR sudo (8)
+on Linux.
+.PP
+The network is not confined: a command can send anything it can read to
+anywhere, and can push to remotes whose credentials it can reach, such as
+through the macOS keychain or an SSH agent.
+.SH SEE ALSO
+.BR fsdiff (1),
+.BR fsfork (1),
+.BR sandbox\-exec (1),
+.BR landlock (7)

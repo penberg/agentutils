@@ -34,6 +34,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "confine"
+version = "0.1.0"
+dependencies = [
+ "argh",
+ "dirs",
+ "libc",
+]
+
+[[package]]
 name = "dirs"
 version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -55,11 +64,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "hmm"
+name = "fsdiff"
 version = "0.1.0"
 dependencies = [
  "argh",
- "dirs",
+ "libc",
+]
+
+[[package]]
+name = "fsfork"
+version = "0.1.0"
+dependencies = [
+ "argh",
  "libc",
 ]
 

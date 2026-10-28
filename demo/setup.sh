@@ -1,9 +1,10 @@
 #!/bin/sh
-# Creates the small repository that demo.tape records hmm in.
+# Creates the small repository that demo.tape records agentutils in, and
+# removes its forks from before. It is kept out of /tmp, which confine lets
+# commands write to.
 set -e
-dir=${1:-/tmp/wordfreq}
-hmm ls -a 2>/dev/null | awk '$2 == "top" { print $1 }' | xargs -r hmm rm 2>/dev/null || true
-rm -rf "$dir"
+dir=${1:-$HOME/wordfreq}
+rm -rf "$dir" "$dir".[0-9]* "$(dirname "$dir")/.$(basename "$dir")".[0-9]*.base
 mkdir -p "$dir"
 cd "$dir"
 git init -q -b main
@@ -40,7 +41,7 @@ from the most common to the least:
 EOF
 git add -A
 git commit -qm "Count word frequencies"
-# Let Claude edit and commit without asking, so the recording needs no
+# Let Claude edit without asking, so the recording needs no
 # keystrokes beyond the prompt. Kept out of git so it is not committed.
 mkdir -p .claude
 cat > .claude/settings.local.json <<'EOF'
@@ -52,9 +53,7 @@ cat > .claude/settings.local.json <<'EOF'
       "Bash(python3:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git log:*)"
     ]
   }
 }

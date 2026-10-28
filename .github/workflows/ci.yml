@@ -22,10 +22,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      # The conformance tests skip, rather than fail, where the sandbox cannot
-      # run, so make sure it can.
+      # The conformance tests of confine skip, rather than fail, where the
+      # sandbox cannot run, so make sure it can.
       - if: runner.os == 'macOS'
         run: /usr/bin/sandbox-exec -p '(version 1)(allow default)' -- /usr/bin/true
       - if: runner.os == 'Linux'
-        run: cargo build && cd "$(mktemp -d)" && "$GITHUB_WORKSPACE/target/debug/hmm" run --rm true
+        run: cargo build && cd "$(mktemp -d)" && "$GITHUB_WORKSPACE/target/debug/confine" . true
       - run: cargo test

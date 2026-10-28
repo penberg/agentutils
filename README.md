@@ -1,139 +1,148 @@
-# hmm
+# agentutils
 
-`hmm` runs a command in a workspace: a copy-on-write clone of the working
-directory that the command may change as it likes, while the working
-directory and the rest of the system stay as they are. It is meant for
-running coding agents, and anything else you would rather not trust with
-your files.
+Small UNIX tools for letting a coding agent, or anything else you would
+rather not trust with your files, work on a directory:
 
-![Claude Code commits in a workspace, and hmm merges the commit](.github/assets/demo.gif)
+- **`fsfork`** forks a directory: it makes a copy-on-write clone of it, and
+  prints where it is.
+- **`confine`** runs a command that may write only to one directory, and
+  cannot read secrets.
+- **`fsdiff`** shows what changed in a fork since it was made, as a patch.
 
-Making a new workspace is fast and takes no space until written to with a
-filesystem that supports copy-on-write. The workspace includes everything
-in the directory (the repository, uncommitted changes, and build output),
-so builds start warm.
+Each does one thing, and none knows about the others. They keep no state:
+a fork is a directory, its path is its name, and `ls`, `rm` and `git` do
+the rest.
+
+## Usage
+
+Fork the directory, and run Claude Code in the fork, where it may write
+nothing else:
+
+```sh
+cd ~/src/turso
+confine -w ~/.claude $(fsfork) claude
+```
+
+`fsfork` prints the fork's path, `~/src/turso.1`, which `confine` runs
+Claude Code in. `-w ~/.claude` lets it save its sessions and settings.
+
+When it is done, see what it changed, apply the changes, and remove the
+fork:
+
+```sh
+fsdiff ../turso.1
+fsdiff ../turso.1 | git apply
+rm -rf ../turso.1 ../.turso.1.base
+```
+
+Meanwhile, you can keep working in `~/src/turso`, and run more forks side by
+side: `turso.2`, `turso.3`, and so on. `ls -d ../turso.*` lists them.
+
+Each command has a man page: [`fsfork.1`](fsfork/fsfork.1),
+[`confine.1`](confine/confine.1), and [`fsdiff.1`](fsdiff/fsdiff.1)
+(`man ./fsfork/fsfork.1`).
 
 ## Install
 
 ```sh
-cargo install --path .
+make install PREFIX=~/.local
 ```
 
-`hmm` runs on Linux and macOS.
+This builds the commands and installs them in `~/.local/bin`, and their man
+pages in `~/.local/share/man`. Without `PREFIX`, they go in `/usr/local`,
+which may need `make && sudo make install`. `make uninstall`, with the same
+`PREFIX`, removes them.
 
-## Requirements
+They run on macOS and Linux.
 
-### Linux
+### Requirements
 
-- Linux 5.19 or later, with Landlock enabled
-- A filesystem such as XFS that supports copy-on-write is recommended;
-  otherwise workspaces are full copies.
+- macOS: APFS, with forks on the same volume as the directory.
+- Linux: Linux 5.19 or later, with Landlock enabled, for `confine`. A file
+  system that can share blocks between files, such as Btrfs or XFS, for
+  `fsfork`; on others, a fork is a full copy.
+- `git`, for `fsdiff`.
 
-### macOS
+## fsfork
 
-- APFS, on the same volume as your home directory
+`fsfork` clones the directory twice, next to it: to the fork, `turso.1`,
+and to its base, `.turso.1.base`, which keeps what the directory was when it
+was forked. The fork is cloned from the base, so that the two are the same
+whatever changes in the directory meanwhile. With no arguments, it forks the
+working directory; given one, that directory; given two, to the second.
 
-## Usage
+A fork is everything in the directory, as it is: the repository,
+uncommitted changes, and build output, so builds start warm. On macOS, it is
+made with `clonefile`, and on Linux with `cp --reflink`, so it takes no
+space until either side is written to.
 
-Run Claude Code in a workspace named `parser`, letting it save its sessions
-and settings in `~/.claude`, and have it commit its work there as usual:
+`fsfork` knows nothing about git: it forks exactly the directory it is
+given.
 
-```sh
-hmm run -n parser -w ~/.claude claude
-```
+## fsdiff
 
-When it is done, see what it changed, merge its commits into the branch you
-are on, and remove the workspace:
+`fsdiff` compares a fork with its base, so it shows what changed in the
+fork, and not what changed in the directory since. Given two directories, it
+compares them instead. It prints a patch that `git apply` applies, and
+exits as `diff` does: 0 if nothing changed, 1 if something did, and 2 if
+something went wrong.
 
-```sh
-hmm diff parser
-hmm merge parser
-hmm rm parser
-```
+It leaves out `.git` directories, and what the base's `.gitignore` files
+ignore, such as build output. New files in the fork are left out if the
+fork's `.gitignore` files ignore them, but a file that was in the base never
+is. Only what is in the patch reaches the directory it is applied to.
 
-`hmm merge` works like `git merge`: a fast-forward if your branch has not
-moved since the workspace was made, a merge commit if it has, and conflicts
-to resolve as for any merge if both changed the same lines. Only commits are
-merged; if the command left changes it did not commit, `hmm merge` says so.
+The fork is read but never trusted, as the command in it could have changed
+anything there, its git configuration included, to make git run any
+command. So `fsdiff` never runs git in the fork's repository: it records
+both directories in a repository of its own, made in the temporary
+directory and removed after, by git with no configuration but its defaults.
+Symbolic links are shown as links and never followed, so a link to a file
+outside the fork cannot bring that file into the patch.
 
-Meanwhile, you can keep working, and run more workspaces side by side. List
-the workspaces of the working directory:
+## confine
 
-```console
-$ hmm
-ID      NAME    STATE    AGE  ORIGIN
-k3xq9a  parser  done      2h  ~/src/penberg/dwim
-p7mw2d  -       running   5m  ~/src/penberg/dwim
-```
+`confine` runs a command in a directory, which the command may write to,
+along with temporary directories, devices, build and package manager caches
+(`~/.cargo`, `~/.rustup`, `~/.cache`, `~/.npm`, `~/Library/Caches`), and
+paths given with `-w`. It cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, or
+`~/.config/gh`. Everything else is allowed. `confine` then becomes the
+command, which exits with its own status.
 
-A workspace can be referred to by its name, its ID, or a unique prefix of
-its ID; with none, commands use the working directory's latest workspace.
+It sets `CLAUDE_CODE_SANDBOXED=1`, so that Claude Code trusts the directory
+without asking, which would write to `~/.claude.json`.
 
-See [MANUAL.md](MANUAL.md) for every command and option.
-
-## Git
-
-`hmm` knows about git, but works without it. When the working directory is
-the top of a git repository, making a workspace records the commit it is at
-and the tree of its files, uncommitted changes included. This takes little
-time and puts nothing in your repository, and gives `hmm` something to
-compare the workspace with:
-
-- `hmm diff` shows what changed in the workspace, leaving out what git
-  ignores, such as build output.
-- `hmm merge` brings the commits made in the workspace into your branch.
-- `hmm pr` pushes the commits made in the workspace to a branch and opens a
-  GitHub pull request for them, with your credentials, which the command in
-  the workspace cannot read.
-- `hmm apply` makes the changes in the workspace, committed or not, in the
-  working directory, without staging or committing anything. It applies all
-  of them or, if any conflicts with what you have changed since, none.
-
-Git runs outside the sandbox and never reads the repository in the
-workspace, whose configuration the command could have changed to make git
-run anything: commits are taken from the workspace as a bundle, and every
-object is checked as it is fetched.
-
-In a directory that is not a git repository, `hmm` keeps a second clone to
-compare the workspace with, and `hmm diff` and `hmm apply` work the same.
-
-## Sandbox
-
-The command may write only to the workspace, temporary directories, devices,
-build and package manager caches (`~/.cargo`, `~/.rustup`, `~/.cache`,
-`~/.npm`, `~/Library/Caches`), and paths given with `-w`. It cannot read
-`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, or other workspaces.
-Everything else is allowed. How this is enforced depends on the platform.
+How the command is confined depends on the platform.
 
 ### macOS
 
 The command runs under Seatbelt, the macOS sandbox, through `sandbox-exec`.
-`hmm` writes a profile that allows everything, then denies writing
+`confine` writes a profile that allows everything, then denies writing
 everywhere but the writable paths, and denies listing, reading, and writing
-the hidden paths. Since later rules win, the workspace, which lies among the
-hidden workspaces, is allowed last. The profile gives the paths as
+the hidden paths. Since later rules win, the directory, which may lie among
+the hidden paths, is allowed last. The profile gives the paths as
 parameters rather than in the text, and Seatbelt matches them after
 resolving symbolic links, so they cannot be escaped by quoting or linking.
 
-`sandbox-exec` cannot run inside another sandbox, so a command in a
-workspace cannot confine another, as `hmm`'s tests do.
+`sandbox-exec` cannot run inside another sandbox, so a confined command
+cannot confine another.
 
 ### Linux
 
 The command runs under Landlock, which a process uses to confine itself and
-the processes it starts, without privileges. `hmm` makes a ruleset in which
-reading and running files, and changing anything, are denied unless
-granted, and applies it just before starting the command. Landlock needs
-Linux 5.19 or later; without it, `hmm run` fails rather than run the command
+the processes it starts, without privileges. `confine` makes a ruleset in
+which reading and running files, and changing anything, are denied unless
+granted, and applies it just before becoming the command. Landlock needs
+Linux 5.19 or later; without it, `confine` fails rather than run the command
 unconfined.
 
 Landlock can only grant rights, to a file and everything under it, and
 cannot take them away from something inside. So rather than denying the
-hidden paths, `hmm` grants the rights to what is around them: it lists each
-directory above a hidden path, and grants reading to every entry in it but
-that path, and so on down. Writing is granted the same way, to the writable
-paths, and then reading and writing to the workspace itself. Because of
-this, on Linux:
+hidden paths, `confine` grants the rights to what is around them: it lists
+each directory above a hidden path, and grants reading to every entry in it
+but that path, and so on down. Writing is granted the same way, to the
+writable paths, and then reading and writing to the directory itself.
+Because of this, on Linux:
 
 - The command can list the files in a hidden directory, such as the names
   of the keys in `~/.ssh`, but cannot read them.
@@ -143,16 +152,16 @@ this, on Linux:
   confines a process without privileges only if it can gain none.
 
 Unlike `sandbox-exec`, Landlock works inside another Landlock sandbox, so a
-command in a workspace can confine another, as `hmm`'s tests do.
+confined command can confine another.
 
-The network is not confined: a command can send anything it can read to
-anywhere, and can push to remotes whose credentials it can reach, such as
-through the macOS keychain or an SSH agent.
+### What is not confined
 
-Commits made in a workspace are not signed if signing needs `~/.gnupg` or
-`~/.ssh`, which the command cannot read; the merge commit `hmm merge` makes
-is. A workspace of a linked worktree cannot be committed to, as its
-repository lies outside the workspace.
+The network: a command can send anything it can read to anywhere, and can
+push to remotes whose credentials it can reach, such as through the macOS
+keychain or an SSH agent.
+
+Commits made in a fork are not signed if signing needs `~/.gnupg` or
+`~/.ssh`, which the command cannot read.
 
 ## License
 

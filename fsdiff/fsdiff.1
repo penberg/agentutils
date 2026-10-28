@@ -1,0 +1,119 @@
+.TH FSDIFF 1 2026-10-28 "agentutils 0.1.0" "User Commands"
+.SH NAME
+fsdiff \- show what changed in a fork since it was made, as a patch
+.SH SYNOPSIS
+.B fsdiff
+.RB [ \-\-stat ]
+.RI [ fork ]
+.br
+.B fsdiff
+.RB [ \-\-stat ]
+.I old new
+.SH DESCRIPTION
+.B fsdiff
+shows what changed in
+.IR fork ,
+or in the working directory if none is given, since
+.BR fsfork (1)
+made it, as a patch: the difference between the fork and its base, which is
+next to it and named after it,
+.I .turso.1.base
+for
+.IR turso.1 .
+What changed in the directory it was forked from since is left out.
+Given two directories,
+.B fsdiff
+shows the difference between them instead, from
+.I old
+to
+.IR new .
+.PP
+The patch is in the form
+.BR git\-diff (1)
+writes, with binary files, so that
+.BR git\-apply (1)
+applies it, to the directory or anywhere else:
+.PP
+.RS
+.B fsdiff turso.1 | git \-C turso apply
+.RE
+.PP
+It changes nothing itself.
+With
+.BR \-\-stat ,
+it shows only which files changed, and how much.
+.SH WHAT IS COMPARED
+Everything in the two directories but:
+.TP
+.I .git
+Git directories, anywhere.
+.TP
+Ignored files
+Files that the
+.I .gitignore
+files in the base ignore, such as build output; and new files in the fork
+that the fork's
+.I .gitignore
+files ignore.
+A file that was in the base is never left out, whatever the fork's
+.I .gitignore
+files say.
+.PP
+Symbolic links are shown as links, with the path they hold, and are never
+followed.
+A file whose mode changed, such as one made executable, is shown so.
+.PP
+Only what is in the patch reaches the directory it is applied to: a change
+left out of it, as to an ignored file, is not applied.
+.SH SAFETY
+The fork is to be read, but not trusted: the command that changed it could
+have changed anything in it.
+.B fsdiff
+runs nothing from it.
+In particular, git never uses a repository in either directory, whose
+configuration could make it run any command: the two are recorded in a
+repository of
+.BR fsdiff 's
+own, made in the temporary directory and removed after, by git with no
+configuration but its defaults, and with none of the variables, such as
+.BR GIT_DIR ,
+that would point it at another.
+The patch is then shown by git with your configuration, for colours and the
+pager, but not to change what the patch says.
+.SH EXIT STATUS
+As
+.BR diff (1):
+0 if nothing changed, 1 if something did, and 2 if something went wrong,
+such as a fork without a base.
+.SH EXAMPLES
+Show what changed in the fork you are in:
+.PP
+.RS
+.B fsdiff
+.RE
+.PP
+Show which files changed in
+.IR turso.1 ,
+then apply the changes to
+.IR turso :
+.PP
+.RS
+.nf
+.B fsdiff \-\-stat turso.1
+.B fsdiff turso.1 | git \-C turso apply
+.fi
+.RE
+.SH CAVEATS
+Commits made in the fork are shown as the changes they made, not as
+commits.
+.PP
+.B git apply
+in a subdirectory of a repository applies the patch's paths from the top of
+the repository; give it
+.B \-\-directory
+to apply them under the subdirectory instead.
+.SH SEE ALSO
+.BR confine (1),
+.BR fsfork (1),
+.BR git\-apply (1),
+.BR git\-diff (1)

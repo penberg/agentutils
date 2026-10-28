@@ -10,7 +10,7 @@ rm -rf demo/frames
 vhs demo/demo.tape
 # Width, height, and background of demo.tape's window and theme: 16:9.
 pad="pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x1e1e2e"
-# Squeeze Claude's run, from just after "hmm run" is entered to just before
+# Squeeze Claude's run, from just after "confine" is entered to just before
 # its summary, into FAST seconds. HEAD and TAIL are the lengths, in
 # seconds, of the parts of the tape before and after it.
 HEAD=2.7 TAIL=7.1 FAST=4
