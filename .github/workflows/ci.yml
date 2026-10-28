@@ -27,5 +27,5 @@ jobs:
       - if: runner.os == 'macOS'
         run: /usr/bin/sandbox-exec -p '(version 1)(allow default)' -- /usr/bin/true
       - if: runner.os == 'Linux'
-        run: cargo build && cd "$(mktemp -d)" && "$GITHUB_WORKSPACE/target/debug/confine" . true
+        run: cargo build && cd "$(mktemp -d)" && "$GITHUB_WORKSPACE/target/debug/confine" -d . true
       - run: cargo test
