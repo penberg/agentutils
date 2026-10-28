@@ -1,7 +1,6 @@
 #!/bin/sh
 # Creates the small repository that demo.tape records agentutils in, and
-# removes its forks from before. It is kept out of /tmp, which confine lets
-# commands write to.
+# removes its forks from before.
 set -e
 dir=${1:-$HOME/wordfreq}
 rm -rf "$dir" "$dir".[0-9]* "$(dirname "$dir")/.$(basename "$dir")".[0-9]*.base
@@ -41,21 +40,3 @@ from the most common to the least:
 EOF
 git add -A
 git commit -qm "Count word frequencies"
-# Let Claude edit without asking, so the recording needs no
-# keystrokes beyond the prompt. Kept out of git so it is not committed.
-mkdir -p .claude
-cat > .claude/settings.local.json <<'EOF'
-{
-  "permissions": {
-    "allow": [
-      "Edit",
-      "Write",
-      "Bash(python3:*)",
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)"
-    ]
-  }
-}
-EOF
-echo .claude/ >> .git/info/exclude

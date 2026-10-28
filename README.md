@@ -15,6 +15,10 @@ state:
 a fork is a directory, its path is its name, and `ls`, `rm` and `git` do
 the rest.
 
+![fsfork forks a repository, rm -rf * in confine empties the fork, and
+fsdiff shows the deletions, while the repository keeps its
+files](.github/assets/demo.gif)
+
 ## Usage
 
 Run Claude Code in a fork of the directory, where it may write nothing
