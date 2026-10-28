@@ -114,10 +114,16 @@ outside the fork cannot bring that file into the patch.
 directory given with `-d`, which the command may write to, along with
 temporary directories, devices, build and package manager caches
 (`~/.cargo`, `~/.rustup`, `~/.cache`, `~/.npm`, `~/Library/Caches`), and
-paths given with `-w`. It cannot read `~/.ssh`, `~/.aws`, `~/.gnupg`, or
-`~/.config/gh`. Everything else is allowed. `confine` then becomes the command, which exits with its
-own status; with `--rm`, it waits for the command instead, removes the
-fork, and exits as the command did.
+paths given with `-w`. In the home directory, it can read only those, paths
+given with `-r`, and what commands need to run: git's configuration,
+`~/.claude.json`, toolchains such as `~/.local/bin` and `~/.nvm`, and on
+macOS the keychains, whose items the keychain itself guards. So secrets,
+such as `~/.ssh`, `~/.aws`, `~/.netrc`, or tokens exported in a shell's
+startup files, are kept from the command without having to know where each
+one is. Everything else, outside the home directory, is allowed. `confine`
+then becomes the command, which exits with its own status; with `--rm`, it
+waits for the command instead, removes the fork, and exits as the command
+did.
 
 It sets `CLAUDE_CODE_SANDBOXED=1`, so that Claude Code trusts the directory
 without asking, which would write to `~/.claude.json`.
@@ -128,9 +134,9 @@ How the command is confined depends on the platform.
 
 The command runs under Seatbelt, the macOS sandbox, through `sandbox-exec`.
 `confine` writes a profile that allows everything, then denies writing
-everywhere but the writable paths, and denies listing, reading, and writing
-the hidden paths. Since later rules win, the directory, which may lie among
-the hidden paths, is allowed last. The profile gives the paths as
+everywhere but the writable paths, and denies listing and reading the home
+directory but the readable and writable paths. Since later rules win, the
+directory, which may lie in the home directory, is allowed last. The profile gives the paths as
 parameters rather than in the text, and Seatbelt matches them after
 resolving symbolic links, so they cannot be escaped by quoting or linking.
 
@@ -148,16 +154,16 @@ unconfined.
 
 Landlock can only grant rights, to a file and everything under it, and
 cannot take them away from something inside. So rather than denying the
-hidden paths, `confine` grants the rights to what is around them: it lists
-each directory above a hidden path, and grants reading to every entry in it
-but that path, and so on down. Writing is granted the same way, to the
-writable paths, and then reading and writing to the directory itself.
-Because of this, on Linux:
+home directory, `confine` grants reading to what is around it: it lists
+each directory above it, and grants reading to every entry in it but the
+one the home directory is in, and so on down. Then it grants reading to
+the readable paths, reading and writing to the writable ones, and both to
+the directory itself. Because of this, on Linux:
 
-- The command can list the files in a hidden directory, such as the names
-  of the keys in `~/.ssh`, but cannot read them.
-- Files made in a directory above a hidden path after the command starts,
-  such as a new file in the home directory, cannot be read.
+- The command can list the files in any directory, such as the names of
+  the keys in `~/.ssh`, but cannot read them.
+- Files made in a directory above the home directory after the command
+  starts, such as a new home directory in `/home`, cannot be read.
 - The command cannot run set-user-ID programs such as `sudo`, as Landlock
   confines a process without privileges only if it can gain none.
 
@@ -172,6 +178,9 @@ keychain or an SSH agent.
 
 Commits made in a fork are not signed if signing needs `~/.gnupg` or
 `~/.ssh`, which the command cannot read.
+
+What the command may write to, it may read, so secrets kept in a writable
+path can be read, such as a registry token in `~/.cargo/credentials.toml`.
 
 ## License
 
