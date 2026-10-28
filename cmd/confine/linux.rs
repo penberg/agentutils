@@ -70,19 +70,20 @@ struct PathBeneathAttr {
 }
 
 /// A command that runs `command` under Landlock: it may write only under
-/// `writable` and to devices, and may not read or write anything under
-/// `hidden` except `dir`, which it may read and write. Everything else, the
-/// network included, is allowed.
+/// `writable` and to devices, and may not read anything under `hidden` but
+/// what is under `readable` or `writable`, and `dir`, which it may read and
+/// write. Everything else, the network included, is allowed.
 ///
 /// Landlock only grants rights, to a file and everything under it, so the
-/// command is granted the rights to what is around the hidden paths rather
-/// than denied those to the hidden paths: what is in a directory above them
-/// when the command starts. The paths must be canonical, as Landlock grants
+/// command is granted reading what is around the hidden paths rather than
+/// denied reading the hidden paths: what is in a directory above them when
+/// the command starts. The paths must be canonical, as Landlock grants
 /// rights to the file a path resolves to.
 pub fn confine(
     command: &[String],
     dir: &Path,
     writable: &[PathBuf],
+    readable: &[PathBuf],
     hidden: &[PathBuf],
 ) -> io::Result<Command> {
     let abi = unsafe {
@@ -123,8 +124,11 @@ pub fn confine(
     };
     ruleset.allow_except_hidden(Path::new("/"), READ)?;
     ruleset.allow_except_hidden(Path::new("/dev"), WRITE)?;
+    for path in readable {
+        ruleset.allow(path, READ)?;
+    }
     for path in writable {
-        ruleset.allow_except_hidden(path, WRITE)?;
+        ruleset.allow(path, READ | WRITE)?;
     }
     ruleset.allow(dir, READ | WRITE)?;
     let fd = ruleset.fd;
@@ -150,7 +154,7 @@ struct Ruleset<'a> {
     fd: OwnedFd,
     /// The rights the ruleset handles: those it denies unless granted.
     handled: u64,
-    /// The paths no rights are granted under.
+    /// The paths no rights are granted under, but by name.
     hidden: &'a [PathBuf],
 }
 

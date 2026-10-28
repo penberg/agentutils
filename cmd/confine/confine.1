@@ -5,6 +5,8 @@ confine \- run a command that may write only to a fork of a directory
 .B confine
 .RB [ \-w
 .IR path ]...
+.RB [ \-r
+.IR path ]...
 .RB [ \-\-rm | \-d
 .IR dir ]
 .RI [ command
@@ -24,7 +26,8 @@ in the fork, or your shell
 or
 .B /bin/sh
 if it is not set) if no command is given, confined: the command may write
-only to the fork, and may not read secrets.
+only to the fork, and may read in your home directory only what it needs,
+and so no secrets.
 Given a directory with
 .BR \-d ,
 it runs the command in that directory, confined to it, and makes no fork.
@@ -72,8 +75,14 @@ It cannot be given with
 .BR \-d ,
 as there is no fork to remove.
 .TP
+.BI \-r " path" "\fR, \fP\-\-read " path
+Let the command read
+.I path
+too, and everything under it, even in the home directory.
+Can be repeated.
+.TP
 .BI \-w " path" "\fR, \fP\-\-write " path
-Let the command write to
+Let the command read and write to
 .I path
 too, and to everything under it.
 Can be repeated.
@@ -102,15 +111,42 @@ and the paths given with
 may be written to.
 .TP
 Reading
-The contents of
+Nothing in the home directory can be read but what may be written to, the
+paths given with
+.BR \-r ,
+and what commands need to run: git's configuration
+.RB ( ~/.gitconfig
+and
+.BR ~/.config/git ),
+Claude Code's
+.RB ( ~/.claude.json ),
+toolchains and the commands installed with them
+.RB ( ~/.local/bin ,
+.BR ~/.local/lib ,
+.BR ~/.local/share/claude ,
+.BR ~/.nvm ,
+.BR ~/.volta ,
+.BR ~/.bun ,
+.BR ~/.deno ,
+.B ~/.pyenv
+and
+.BR ~/.rbenv ),
+and, on macOS,
+.B ~/.CFUserTextEncoding
+and the keychains in
+.BR ~/Library/Keychains ,
+whose items the keychain itself guards.
+So secrets, such as those in
 .BR ~/.ssh ,
 .BR ~/.aws ,
-.B ~/.gnupg
-and
-.B ~/.config/gh
-cannot be read.
-On Linux, their files can still be listed, and files made in the
-directories above them after the command starts cannot be read.
+.BR ~/.netrc ,
+or a shell's startup files, cannot be read, wherever in it they are.
+On macOS, the directories above the fork, or
+.IR dir ,
+can be listed.
+On Linux, every directory can be listed, though the files in it cannot be
+read, and files made in the directories above the home directory after the
+command starts cannot be read.
 .PP
 The network and the GPU are not confined.
 .SH ENVIRONMENT

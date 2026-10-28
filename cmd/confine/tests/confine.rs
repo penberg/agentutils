@@ -206,7 +206,7 @@ fn the_command_writes_to_temporary_directories_and_caches() {
 }
 
 #[test]
-fn the_command_cannot_read_secrets() {
+fn the_command_reads_only_what_it_needs_in_the_home_directory() {
     need_sandbox!();
     let world = World::new();
     let dir = world.dir("project");
@@ -216,15 +216,59 @@ fn the_command_cannot_read_secrets() {
         ".aws/credentials",
         ".gnupg/key",
         ".config/gh/hosts.yml",
+        ".netrc",
+        ".npmrc",
+        ".docker/config.json",
+        ".config/other",
+        "notes.txt",
     ] {
         write(&home, secret, "secret\n");
         let out = world.confine(&dir, &["cat", home.join(secret).to_str().unwrap()]);
         assert!(!out.status.success(), "read {secret}");
         assert!(!stdout(&out).contains("secret"));
     }
-    write(&home, ".config/other", "readable\n");
-    let out = world.confine(&dir, &["cat", home.join(".config/other").to_str().unwrap()]);
-    assert_eq!(stdout(&out), "readable\n");
+    for readable in [".gitconfig", ".config/git/ignore", ".cargo/config.toml"] {
+        write(&home, readable, "readable\n");
+        let out = world.confine(&dir, &["cat", home.join(readable).to_str().unwrap()]);
+        assert_eq!(stdout(&out), "readable\n", "{readable}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn the_command_reads_paths_given_with_r() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.dir("project");
+    let home = world.home();
+    write(&home, ".npmrc", "readable\n");
+    write(&home, "notes/a", "readable\n");
+    let out = world.confine(
+        &dir,
+        &[
+            "-r",
+            home.join(".npmrc").to_str().unwrap(),
+            "--read",
+            home.join("notes").to_str().unwrap(),
+            "sh",
+            "-c",
+            "cat ~/.npmrc ~/notes/a && ! echo x > ~/notes/b",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "readable\nreadable\n");
+    assert!(!home.join("notes/b").exists());
+}
+
+#[test]
+fn the_command_reads_the_directory_under_the_home_directory() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.home().join("src/project");
+    write(&dir, "a", "a\n");
+    let out = world.confine(&dir, &["sh", "-c", "pwd && cat a"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let fork = world.home().join("src/project.1");
+    assert_eq!(stdout(&out), format!("{}\na\n", fork.display()));
 }
 
 #[test]
@@ -244,6 +288,10 @@ fn fails_for_paths_that_do_not_exist() {
     assert_fails(&world.confine(&dir, &["-d", "missing", "true"]), "missing");
     assert_fails(
         &world.confine(&dir, &["-w", missing.to_str().unwrap(), "true"]),
+        "missing",
+    );
+    assert_fails(
+        &world.confine(&dir, &["-r", missing.to_str().unwrap(), "true"]),
         "missing",
     );
     write(&dir, "file", "");

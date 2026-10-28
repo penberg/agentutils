@@ -1,7 +1,7 @@
 //! `confine` runs a command confined to a directory, a fork of the working
 //! directory unless it is given one: the command may write there, to
-//! temporary directories, and to caches, but nowhere else, and may not read
-//! secrets such as SSH keys.
+//! temporary directories, and to caches, but nowhere else, and may read in
+//! the home directory only what it needs, and so no secrets such as SSH keys.
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -29,21 +29,47 @@ use argh::FromArgs;
 /// that builds and package managers keep working.
 const CACHES: &[&str] = &[".cargo", ".rustup", ".cache", ".npm", "Library/Caches"];
 
-/// Directories under the home directory that the command may not read.
-const SECRETS: &[&str] = &[".ssh", ".aws", ".gnupg", ".config/gh"];
+/// Paths under the home directory that the command may read. It may read
+/// nothing else there but what it may write to, so that secrets are kept
+/// from it without knowing where each one is.
+const READABLE: &[&str] = &[
+    // Configuration.
+    ".gitconfig",
+    ".config/git",
+    ".claude.json",
+    ".CFUserTextEncoding",
+    // Toolchains, and the commands installed with them.
+    ".local/bin",
+    ".local/lib",
+    ".local/share/claude",
+    ".nvm",
+    ".volta",
+    ".bun",
+    ".deno",
+    ".pyenv",
+    ".rbenv",
+    // The macOS keychains, whose items the keychain itself guards, and which
+    // Claude Code keeps its login in.
+    "Library/Keychains",
+];
 
 /// The terminal's signals, which reach the command too, and which `confine`
 /// outlives, with `--rm`, to remove the fork.
 const SIGNALS: [i32; 3] = [libc::SIGINT, libc::SIGQUIT, libc::SIGHUP];
 
 /// Run a command in a fork of the working directory, or in a directory, that
-/// may write only there, to temporary directories and caches, and may not
-/// read secrets.
+/// may write only there, to temporary directories and caches, and may read
+/// in the home directory only what it needs.
 #[derive(FromArgs)]
 struct Args {
     /// another path the command may write to; can be repeated
     #[argh(option, short = 'w')]
     write: Vec<PathBuf>,
+
+    /// another path the command may read, in the home directory; can be
+    /// repeated
+    #[argh(option, short = 'r')]
+    read: Vec<PathBuf>,
 
     /// the directory the command runs in and may write to, rather than a
     /// fork of the working directory
@@ -105,11 +131,15 @@ fn confine(args: &Args) -> io::Result<Ran> {
     for path in &args.write {
         writable.push(path.canonicalize().map_err(|e| at(path, e))?);
     }
-    let hidden: Vec<PathBuf> = SECRETS
+    let mut readable: Vec<PathBuf> = READABLE
         .iter()
-        .map(|secret| home.join(secret))
+        .map(|path| home.join(path))
         .filter_map(|path| path.canonicalize().ok())
         .collect();
+    for path in &args.read {
+        readable.push(path.canonicalize().map_err(|e| at(path, e))?);
+    }
+    let hidden: Vec<PathBuf> = home.canonicalize().into_iter().collect();
     let command = if args.command.is_empty() {
         vec![env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())]
     } else {
@@ -123,11 +153,11 @@ fn confine(args: &Args) -> io::Result<Ran> {
                 dir.display()
             )));
         }
-        return run(&command, &dir, &writable, &hidden, false);
+        return run(&command, &dir, &writable, &readable, &hidden, false);
     }
     let fork = fsfork::fork(Path::new("."))?;
     eprintln!("confine: forked to {}", fork.display());
-    let ran = run(&command, &fork, &writable, &hidden, args.rm);
+    let ran = run(&command, &fork, &writable, &readable, &hidden, args.rm);
     if (args.rm || !matches!(ran, Ok(Ran::Exited(_))))
         && let Err(e) = fsfork::remove(&fork)
     {
@@ -142,10 +172,11 @@ fn run(
     command: &[String],
     dir: &Path,
     writable: &[PathBuf],
+    readable: &[PathBuf],
     hidden: &[PathBuf],
     wait: bool,
 ) -> io::Result<Ran> {
-    let mut confined = os::confine(command, dir, writable, hidden)?;
+    let mut confined = os::confine(command, dir, writable, readable, hidden)?;
     // Claude Code would otherwise ask whether to trust every new directory,
     // and accepting would write to `~/.claude.json`, which it may not.
     confined.current_dir(dir).env("CLAUDE_CODE_SANDBOXED", "1");
