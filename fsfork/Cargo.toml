@@ -1,14 +1,12 @@
 [package]
 name = "fsfork"
-description = "Fork a directory: make a copy-on-write clone of it"
+description = "Forks of directories: copy-on-write clones, with a base to compare them with"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "fsfork"
+[lib]
 path = "fsfork.rs"
 
 [dependencies]
-argh.workspace = true
 libc.workspace = true

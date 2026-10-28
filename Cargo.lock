@@ -68,6 +68,7 @@ name = "fsdiff"
 version = "0.1.0"
 dependencies = [
  "argh",
+ "fsfork",
  "libc",
 ]
 
@@ -75,8 +76,15 @@ dependencies = [
 name = "fsfork"
 version = "0.1.0"
 dependencies = [
- "argh",
  "libc",
+]
+
+[[package]]
+name = "fsfork-cmd"
+version = "0.1.0"
+dependencies = [
+ "argh",
+ "fsfork",
 ]
 
 [[package]]

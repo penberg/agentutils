@@ -1,0 +1,14 @@
+[package]
+name = "fsfork-cmd"
+description = "Fork a directory: make a copy-on-write clone of it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fsfork"
+path = "fsfork.rs"
+
+[dependencies]
+argh.workspace = true
+fsfork.workspace = true

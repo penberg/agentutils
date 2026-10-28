@@ -4,9 +4,7 @@
 mod git;
 
 use std::{
-    env,
-    ffi::OsString,
-    io,
+    env, io,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -79,7 +77,7 @@ fn fsdiff(args: &Args) -> io::Result<bool> {
         [] | [_] => {
             let fork = args.paths.first().map_or(Path::new("."), PathBuf::as_path);
             let fork = directory(fork)?;
-            let base = base_of(&fork);
+            let base = fsfork::base_of(&fork);
             if !base.is_dir() {
                 return Err(io::Error::other(format!(
                     "{}: no base at {}; is it a fork?",
@@ -112,12 +110,4 @@ fn directory(path: &Path) -> io::Result<PathBuf> {
         )));
     }
     Ok(dir)
-}
-
-/// The base of `fork`: `.<name>.base` next to it.
-fn base_of(fork: &Path) -> PathBuf {
-    let mut name = OsString::from(".");
-    name.push(fork.file_name().unwrap_or_default());
-    name.push(".base");
-    fork.with_file_name(name)
 }

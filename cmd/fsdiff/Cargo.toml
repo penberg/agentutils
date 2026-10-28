@@ -11,4 +11,5 @@ path = "fsdiff.rs"
 
 [dependencies]
 argh.workspace = true
+fsfork.workspace = true
 libc.workspace = true

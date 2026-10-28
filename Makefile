@@ -13,7 +13,7 @@ MANDIR ?= $(PREFIX)/share/man
 
 COMMANDS = fsfork confine fsdiff
 BINARIES = $(COMMANDS:%=target/release/%)
-SOURCES = Cargo.toml Cargo.lock $(wildcard */Cargo.toml */*.rs)
+SOURCES = Cargo.toml Cargo.lock $(wildcard fsfork/Cargo.toml fsfork/*.rs cmd/*/Cargo.toml cmd/*/*.rs)
 
 all: $(BINARIES)
 
@@ -25,7 +25,7 @@ install: all
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)/man1
 	for command in $(COMMANDS); do \
 		install -m 755 target/release/$$command $(DESTDIR)$(BINDIR)/$$command && \
-		install -m 644 $$command/$$command.1 $(DESTDIR)$(MANDIR)/man1/$$command.1 || exit 1; \
+		install -m 644 cmd/$$command/$$command.1 $(DESTDIR)$(MANDIR)/man1/$$command.1 || exit 1; \
 	done
 
 uninstall:

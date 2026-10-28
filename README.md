@@ -38,9 +38,9 @@ rm -rf ../turso.1 ../.turso.1.base
 Meanwhile, you can keep working in `~/src/turso`, and run more forks side by
 side: `turso.2`, `turso.3`, and so on. `ls -d ../turso.*` lists them.
 
-Each command has a man page: [`fsfork.1`](fsfork/fsfork.1),
-[`confine.1`](confine/confine.1), and [`fsdiff.1`](fsdiff/fsdiff.1)
-(`man ./fsfork/fsfork.1`).
+Each command has a man page: [`fsfork.1`](cmd/fsfork/fsfork.1),
+[`confine.1`](cmd/confine/confine.1), and [`fsdiff.1`](cmd/fsdiff/fsdiff.1)
+(`man ./cmd/fsfork/fsfork.1`).
 
 ## Install
 
