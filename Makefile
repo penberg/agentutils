@@ -1,13 +1,13 @@
 # Builds fsfork, confine and fsdiff, and installs them and their man pages
 # under PREFIX:
 #
-#   make install                   # in /usr/local, which may need sudo
-#   make install PREFIX=~/.local   # in your home directory
+#   make install                     # in ~/.local
+#   make install PREFIX=/usr/local   # system-wide, which may need sudo
 #
-# `make` builds as you, so `make && sudo make install` builds nothing as
-# root.
+# `make` builds as you, so `make && sudo make install PREFIX=/usr/local`
+# builds nothing as root.
 
-PREFIX ?= /usr/local
+PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
 

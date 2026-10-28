@@ -49,13 +49,13 @@ Each command has a man page: [`fsfork.1`](cmd/fsfork/fsfork.1),
 ## Install
 
 ```sh
-make install PREFIX=~/.local
+make install
 ```
 
 This builds the commands and installs them in `~/.local/bin`, and their man
-pages in `~/.local/share/man`. Without `PREFIX`, they go in `/usr/local`,
-which may need `make && sudo make install`. `make uninstall`, with the same
-`PREFIX`, removes them.
+pages in `~/.local/share/man`. To install them elsewhere, set `PREFIX`; in
+`/usr/local`, that may need `make && sudo make install PREFIX=/usr/local`.
+`make uninstall`, with the same `PREFIX`, removes them.
 
 They run on macOS and Linux.
 
