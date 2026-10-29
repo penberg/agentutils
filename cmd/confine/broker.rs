@@ -1,34 +1,28 @@
-//! macOS: the broker, which runs `gh` for the confined command, outside the
-//! sandbox, each time you allow it, so that the command can open pull
-//! requests though it cannot read `gh`'s configuration.
+//! macOS: the broker, which runs tools such as `gh` for the confined
+//! command, outside the sandbox, each time you allow it, so that the command
+//! can open pull requests though it cannot read `gh`'s configuration.
 //!
-//! The command finds a shim first on its `PATH` in place of `gh`: `confine`
-//! itself, under that name, which sends its arguments, working directory
-//! and standard streams over a socket to the broker, and exits as the broker
-//! says `gh` did. The broker asks you, with a dialog, whether to run it, and
-//! runs the real `gh` with the shim's streams, so that it talks to the
-//! terminal itself.
-//!
-//! `gh` runs git, and git runs what the repository's configuration and hooks
-//! tell it to, both of which the command can write. So `gh` runs with a
-//! clone of the repository's `.git` made where the command cannot write it,
-//! and only if its configuration differs from what it was when `confine`
-//! started in nothing but what `gh` and `git push` write themselves, with
-//! hooks off. The clone then takes the place of `.git`, so that what `gh`
-//! did to it, such as setting the branch it pushed to, is kept.
+//! The command finds a shim first on its `PATH` in place of each tool:
+//! `confine` itself, under the tool's name, which sends its arguments,
+//! working directory and standard streams over a socket to the broker, and
+//! exits as the broker says the tool did. The broker asks you, with a
+//! dialog that denies by itself if no one answers, whether to run it, and
+//! runs the real tool with the shim's streams, so that it talks to the
+//! terminal itself. What each tool may be asked to do, and how it is kept
+//! from running what the command wrote, is in `tools`.
 
 use std::{
     collections::HashSet,
     env,
-    ffi::{OsStr, OsString},
-    fs::{self, DirBuilder, File},
+    ffi::OsString,
+    fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Write},
     mem,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         unix::{
             ffi::{OsStrExt, OsStringExt},
-            fs::{DirBuilderExt, PermissionsExt},
+            fs::{DirBuilderExt, PermissionsExt, symlink},
             net::{UnixListener, UnixStream},
             process::{CommandExt, ExitStatusExt},
         },
@@ -36,48 +30,102 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command, ExitCode, Stdio},
     ptr,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     thread,
 };
 
-use crate::at;
+use crate::{
+    at,
+    tools::{Policy, Repo, TOOLS, Tool},
+};
 
 /// The variable that tells the shim where the broker's socket is.
-const SOCKET: &str = "CONFINE_BROKER";
+const SOCKET: &str = "CONFINE_SOCKET";
 
 /// The variable that names a program to ask with instead of a dialog: it is
 /// given the question, and prints `once` or `always` to allow, and anything
 /// else to deny.
 const ASK: &str = "CONFINE_ASK";
 
-/// `gh`'s commands that manage credentials or configuration, or run
-/// extensions, which are never run.
-const DENIED: &[&str] = &[
-    "alias",
-    "auth",
-    "config",
-    "ext",
-    "extension",
-    "extensions",
-    "gpg-key",
-    "secret",
-    "ssh-key",
-    "variable",
-];
+/// The file, in the home directory, that lists what you allowed always,
+/// one per line, such as `gh pr create`. The command can neither read nor
+/// write it.
+const ALLOWED: &str = ".config/confine/allow";
 
-/// `gh`'s commands that can do anything, which you are asked about every
-/// time.
-const UNBOUNDED: &[&str] = &["api"];
+/// How long the dialog waits for an answer before it denies, in seconds, so
+/// that a command no one is watching is not kept waiting.
+const TIMEOUT: u32 = 10;
+
+/// The dialog, in JavaScript for Automation: an alert that asks whether to
+/// let the tool run outside the sandbox, with the command line in a box of
+/// its own, and whose default button, Deny, counts down, and is pressed when
+/// it reaches zero. It is given the tool, the command line, the directory the
+/// command is confined to, the one the tool is to run in, the time out, and,
+/// to offer to allow always, what to allow so, and prints `once`, `always`
+/// or `deny`.
+const DIALOG: &str = r#"ObjC.import('Cocoa');
+function run(argv) {
+    const [tool, line, dir, cwd, timeout, always] =
+        [argv[0], argv[1], argv[2], argv[3], Number(argv[4]), argv[5]];
+    const tilde = path => $(path).stringByAbbreviatingWithTildeInPath.js;
+    const app = $.NSApplication.sharedApplication;
+    app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+    const alert = $.NSAlert.alloc.init;
+    alert.messageText = `Allow ${tool} to run outside the sandbox?`;
+    alert.informativeText = cwd == dir
+        ? `The command confined to ${tilde(dir)} wants to run:`
+        : `The command confined to ${tilde(dir)} wants to run, in ${tilde(cwd)}:`;
+    const symbol = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('lock.shield', 'confine');
+    if (symbol && !symbol.isNil()) {
+        const config = $.NSImageSymbolConfiguration.configurationWithPointSizeWeight(48, $.NSFontWeightRegular)
+            .configurationByApplyingConfiguration(
+                $.NSImageSymbolConfiguration.configurationWithHierarchicalColor($.NSColor.systemOrangeColor));
+        alert.icon = symbol.imageWithSymbolConfiguration(config);
+    }
+    // The command line, monospaced, wrapped, and selectable, on a rounded
+    // background, wide enough that the buttons sit in a row.
+    const width = 420, pad = 10;
+    const text = $.NSTextField.wrappingLabelWithString(line);
+    text.font = $.NSFont.monospacedSystemFontOfSizeWeight(12, $.NSFontWeightRegular);
+    text.selectable = true;
+    const size = text.cell.cellSizeForBounds($.NSMakeRect(0, 0, width - 2 * pad, 10000));
+    const height = Math.min(size.height, 200) + 2 * pad;
+    text.frame = $.NSMakeRect(pad, pad, width - 2 * pad, height - 2 * pad);
+    const box = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height));
+    box.wantsLayer = true;
+    box.layer.cornerRadius = 6;
+    box.layer.backgroundColor = $.NSColor.quaternaryLabelColor.CGColor;
+    box.addSubview(text);
+    alert.accessoryView = box;
+    const deny = alert.addButtonWithTitle(`Deny (${timeout})`);
+    alert.addButtonWithTitle('Allow Once');
+    if (always) alert.addButtonWithTitle(`Always Allow “${always}”`);
+    let left = timeout;
+    const timer = $.NSTimer.timerWithTimeIntervalRepeatsBlock(1, true, t => {
+        left -= 1;
+        if (left > 0) {
+            deny.title = `Deny (${left})`;
+        } else {
+            t.invalidate;
+            app.abortModal;
+        }
+    });
+    $.NSRunLoop.currentRunLoop.addTimerForMode(timer, $.NSModalPanelRunLoopMode);
+    app.activateIgnoringOtherApps(true);
+    alert.window.initialFirstResponder = deny;
+    const response = alert.runModal;
+    timer.invalidate;
+    return response == $.NSAlertSecondButtonReturn ? 'once'
+        : response == $.NSAlertThirdButtonReturn ? 'always'
+        : 'deny';
+}"#;
 
 /// The longest argument the shim may send, to bound what the broker reads.
 const MAX_LEN: u64 = 1 << 24;
 
-/// Runs `gh` for a confined command, until it is dropped.
+/// Runs tools for a confined command, until it is dropped.
 pub struct Broker {
-    /// Where the shim and the socket are, which the command may write to.
+    /// Where the shims and the socket are, which the command may write to.
     shared: PathBuf,
     /// Where the clones of `.git` are made, which the command may not write
     /// to, or read.
@@ -86,19 +134,16 @@ pub struct Broker {
 
 /// What the broker knows, which each request it serves shares.
 struct State {
-    /// The real `gh`.
-    gh: PathBuf,
+    /// The tools that are installed, and where.
+    tools: Vec<(&'static dyn Tool, PathBuf)>,
     /// The directory the command is confined to.
     dir: PathBuf,
-    private: PathBuf,
-    /// The configuration of the directory's `.git` when `confine` started,
-    /// if it was a repository.
-    config: Option<HashSet<Vec<u8>>>,
-    /// The commands you allowed always, such as `gh pr create`, which is
-    /// locked while you are asked, so that you are asked one thing at a time.
-    always: Mutex<HashSet<String>>,
-    /// How many clones of `.git` have been made, to name the next.
-    clones: AtomicU64,
+    repo: Repo,
+    /// The file that lists what you allowed always.
+    allowed: PathBuf,
+    /// Locked while you are asked, so that you are asked one thing at a
+    /// time.
+    asking: Mutex<()>,
 }
 
 /// What you answered.
@@ -109,18 +154,16 @@ enum Answer {
 }
 
 impl Broker {
-    /// Starts brokering `gh` for a command confined to `dir`, in which `home`
-    /// is the home directory, unless `gh` is not installed.
+    /// Starts running tools for a command confined to `dir`, in which
+    /// `home` is the home directory, unless none is installed.
     pub fn start(dir: &Path, home: &Path) -> io::Result<Option<Broker>> {
-        let Some(gh) = find("gh") else {
+        let tools: Vec<(&'static dyn Tool, PathBuf)> = TOOLS
+            .iter()
+            .filter_map(|&tool| find(tool.name()).map(|path| (tool, path)))
+            .collect();
+        if tools.is_empty() {
             return Ok(None);
-        };
-        let git = dir.join(".git");
-        let config = if git.is_dir() {
-            Some(config(&git)?)
-        } else {
-            None
-        };
+        }
         let id = format!("confine-{}", process::id());
         let shared = env::temp_dir().canonicalize()?.join(&id);
         DirBuilder::new().mode(0o700).create(&shared)?;
@@ -130,16 +173,21 @@ impl Broker {
             .mode(0o700)
             .recursive(true)
             .create(&broker.private)?;
+        let repo = Repo::new(dir, &broker.private)?;
+        // The command may not read `confine` where it is installed, so a
+        // copy is where it can.
+        fs::copy(env::current_exe()?, broker.shared.join("confine"))?;
         fs::create_dir(broker.shared.join("bin"))?;
-        fs::copy(env::current_exe()?, broker.shared.join("bin/gh"))?;
+        for (tool, _) in &tools {
+            symlink("../confine", broker.shared.join("bin").join(tool.name()))?;
+        }
         let listener = UnixListener::bind(broker.socket())?;
         let state = Arc::new(State {
-            gh,
+            tools,
             dir: dir.to_path_buf(),
-            private: broker.private.clone(),
-            config,
-            always: Mutex::new(HashSet::new()),
-            clones: AtomicU64::new(0),
+            repo,
+            allowed: home.join(ALLOWED),
+            asking: Mutex::new(()),
         });
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -150,7 +198,7 @@ impl Broker {
         Ok(Some(broker))
     }
 
-    /// The environment the command needs for `gh` to be the shim.
+    /// The environment the command needs for the tools to be the shims.
     pub fn env(&self) -> io::Result<Vec<(&'static str, OsString)>> {
         let mut paths = vec![self.shared.join("bin")];
         paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
@@ -171,8 +219,8 @@ impl Drop for Broker {
 }
 
 impl State {
-    /// Serves the shim at the other end of `stream`: runs `gh` for it, if
-    /// you allow it, and tells it how `gh` exited.
+    /// Serves the shim at the other end of `stream`: runs its tool for it,
+    /// if you allow it, and tells it how the tool exited.
     fn serve(&self, mut stream: UnixStream) {
         let Ok(Ok([stdin, stdout, stderr])) = receive_fds(&stream).map(<[OwnedFd; 3]>::try_from)
         else {
@@ -190,18 +238,27 @@ impl State {
         let _ = stream.write_all(&status.to_be_bytes());
     }
 
-    /// Runs `gh` as `request`, its working directory and then its
-    /// arguments, asks, with `stdio`, if you allow it, and returns its exit
-    /// status.
+    /// Runs the tool as `request`, its name, its working directory and then
+    /// its arguments, says, if you allow it, with `stdio`, and returns its
+    /// exit status.
     fn run(&self, request: Vec<OsString>, stdio: [OwnedFd; 3], err: &mut File) -> io::Result<i32> {
         let mut request = request.into_iter();
+        let name = request.next().unwrap_or_default();
+        let Some(&(tool, ref path)) = self.tools.iter().find(|(tool, _)| name == tool.name())
+        else {
+            return Err(io::Error::other(format!(
+                "{}: not a tool",
+                name.to_string_lossy()
+            )));
+        };
         let cwd = PathBuf::from(request.next().unwrap_or_default());
         let args: Vec<OsString> = request.collect();
         let cwd = cwd.canonicalize().map_err(|e| at(&cwd, e))?;
         if !cwd.starts_with(&self.dir) {
             return Err(io::Error::other(format!(
-                "{}: gh runs only in {}",
+                "{}: {} runs only in {}",
                 cwd.display(),
+                tool.name(),
                 self.dir.display()
             )));
         }
@@ -210,67 +267,46 @@ impl State {
             .map(|arg| arg.to_str())
             .collect::<Option<Vec<&str>>>()
         else {
-            return Err(io::Error::other("gh's arguments must be UTF-8"));
+            return Err(io::Error::other(format!(
+                "{}'s arguments must be UTF-8",
+                tool.name()
+            )));
         };
-        // The command, such as `gh pr create`: the words before the first
-        // flag, up to two.
-        let words: Vec<&str> = args
-            .iter()
-            .take_while(|arg| !arg.starts_with('-'))
-            .take(2)
-            .copied()
-            .collect();
-        if let Some(word) = words.first().filter(|word| DENIED.contains(word)) {
-            return Err(io::Error::other(format!("gh {word}: never run for it")));
+        let line = quoted(tool.name(), &args);
+        let always = match tool.policy(&args) {
+            Policy::Never(what) => {
+                return Err(io::Error::other(format!("{what}: never run for it")));
+            }
+            Policy::AskEachTime => None,
+            Policy::Ask(what) => Some(what),
+        };
+        if !self.allowed(tool.name(), &line, &cwd, always.as_deref())? {
+            return Err(io::Error::other(format!(
+                "{line}: not allowed; no one allowed it in time, or it was denied"
+            )));
         }
-        let line = quoted(&args);
-        let always = (!words.is_empty() && !UNBOUNDED.contains(&words[0]))
-            .then(|| format!("gh {}", words.join(" ")));
-        if !self.allowed(&line, &cwd, always)? {
-            return Err(io::Error::other(format!("{line}: you did not allow it")));
-        }
-        let git = self.clone_git()?;
         let [stdin, stdout, stderr] = stdio;
-        let mut gh = Command::new(&self.gh);
-        gh.args(&args)
+        let mut command = Command::new(path);
+        command
+            .args(&args)
             .current_dir(&cwd)
             .stdin(stdin)
             .stdout(stdout)
-            .stderr(stderr)
-            .env(
-                "GIT_DIR",
-                git.clone().unwrap_or_else(|| self.private.join("none")),
-            )
-            .env("GIT_WORK_TREE", &self.dir);
-        // Hooks and the file system monitor are programs in, or named by,
-        // `.git`, so are turned off whatever it says. Variables of this kind
-        // the user set are kept.
-        let n: usize = env::var("GIT_CONFIG_COUNT")
-            .ok()
-            .and_then(|n| n.parse().ok())
-            .unwrap_or(0);
-        let off = [("core.hooksPath", "/dev/null"), ("core.fsmonitor", "false")];
-        for (i, (key, value)) in off.iter().enumerate() {
-            gh.env(format!("GIT_CONFIG_KEY_{}", n + i), key)
-                .env(format!("GIT_CONFIG_VALUE_{}", n + i), value);
-        }
-        gh.env("GIT_CONFIG_COUNT", (n + off.len()).to_string());
-        // `confine` ignores the terminal's signals while it waits, which `gh`
-        // gets as they are by default.
+            .stderr(stderr);
+        let finish = tool.prepare(&self.repo, &mut command)?;
+        // `confine` ignores the terminal's signals while it waits, which the
+        // tool gets as they are by default.
         unsafe {
-            gh.pre_exec(|| {
+            command.pre_exec(|| {
                 for signal in crate::SIGNALS {
                     libc::signal(signal, libc::SIG_DFL);
                 }
                 Ok(())
             });
         }
-        let status = gh.status().map_err(|e| at(&self.gh, e));
-        if let Some(clone) = git
-            && let Err(e) = self.restore(&clone)
-        {
-            let _ = writeln!(err, "confine: what gh changed in .git is lost: {e}");
-            let _ = fs::remove_dir_all(&clone);
+        let status = command.status().map_err(|e| at(path, e));
+        if let Err(e) = finish() {
+            let _ = writeln!(err, "confine: {e}");
         }
         let status = status?;
         Ok(status
@@ -278,13 +314,19 @@ impl State {
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
     }
 
-    /// Whether you allow running `line` in `cwd`: once, or, if `always` is
-    /// given, every time the command runs it until `confine` exits.
-    fn allowed(&self, line: &str, cwd: &Path, always: Option<String>) -> io::Result<bool> {
-        let mut allowed = self.always.lock().unwrap_or_else(|e| e.into_inner());
-        if always
-            .as_ref()
-            .is_some_and(|always| allowed.contains(always))
+    /// Whether you allow `tool` running `line` in `cwd`: once, or, if
+    /// `always` is given, always, which is kept in the file of what you
+    /// allowed so.
+    fn allowed(
+        &self,
+        tool: &str,
+        line: &str,
+        cwd: &Path,
+        always: Option<&str>,
+    ) -> io::Result<bool> {
+        let _asking = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(always) = always
+            && allowed(&self.allowed)?.contains(always)
         {
             return Ok(true);
         }
@@ -293,171 +335,86 @@ impl State {
             self.dir.display(),
             cwd.display()
         );
-        let label = always
-            .as_ref()
-            .map(|always| format!("Always allow {always}"));
-        Ok(match ask(&question, label.as_deref())? {
+        Ok(match ask(&question, tool, line, &self.dir, cwd, always)? {
             Answer::Deny => false,
             Answer::Once => true,
             Answer::Always => {
-                allowed.extend(always);
+                if let Some(always) = always {
+                    remember(&self.allowed, always)?;
+                }
                 true
             }
         })
     }
-
-    /// Clones the directory's `.git` to where the command cannot write, and
-    /// returns where, if its configuration is safe for git to run with. If
-    /// the directory was not a repository, there is none.
-    fn clone_git(&self) -> io::Result<Option<PathBuf>> {
-        let Some(original) = &self.config else {
-            return Ok(None);
-        };
-        let git = self.dir.join(".git");
-        if !git.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
-            return Err(io::Error::other(format!(
-                "{}: no longer a directory",
-                git.display()
-            )));
-        }
-        let n = self.clones.fetch_add(1, Ordering::Relaxed);
-        let clone = self.private.join(format!("{n}.git"));
-        clonefile(&git, &clone).map_err(|e| at(&clone, e))?;
-        let checked = check(&clone, original);
-        if checked.is_err() {
-            let _ = fs::remove_dir_all(&clone);
-        }
-        checked.map(|()| Some(clone))
-    }
-
-    /// Puts `clone` in the place of the directory's `.git`.
-    fn restore(&self, clone: &Path) -> io::Result<()> {
-        let git = self.dir.join(".git");
-        let old = clone.with_extension("old");
-        fs::rename(&git, &old)?;
-        if let Err(e) = fs::rename(clone, &git) {
-            let _ = fs::rename(&old, &git);
-            return Err(e);
-        }
-        fs::remove_dir_all(&old)
-    }
 }
 
-/// Checks that the configuration of `git` differs from `original` in
-/// nothing but what `gh` and `git push` write, and that it does not name
-/// another directory to take it from.
-fn check(git: &Path, original: &HashSet<Vec<u8>>) -> io::Result<()> {
-    if git.join("commondir").symlink_metadata().is_ok() {
-        return Err(io::Error::other(
-            ".git/commondir: made by the command, so gh is not run",
-        ));
-    }
-    for entry in config(git)? {
-        if !original.contains(&entry) && !written_by_gh(&entry) {
-            let entry = String::from_utf8_lossy(&entry);
-            let key = entry.split('\n').next().unwrap_or_default();
-            return Err(io::Error::other(format!(
-                ".git/config: {key} changed by the command, so gh is not run"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// The entries of the configuration of `git`, each a key and its value, as
-/// `git config --list` gives them, from `config` and `config.worktree`.
-fn config(git: &Path) -> io::Result<HashSet<Vec<u8>>> {
-    let mut entries = HashSet::new();
-    for file in ["config", "config.worktree"] {
-        let path = git.join(file);
-        if path.symlink_metadata().is_err() {
-            continue;
-        }
-        // Run outside the repository, so that git reads only the file.
-        let out = Command::new("git")
-            .current_dir("/")
-            .args(["config", "--no-includes", "--null", "--list", "--file"])
-            .arg(&path)
-            .stderr(Stdio::piped())
-            .output()?;
-        if !out.status.success() {
-            return Err(io::Error::other(format!(
-                "{}: {}",
-                path.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
-        }
-        entries.extend(
-            out.stdout
-                .split(|&b| b == 0)
-                .filter(|entry| !entry.is_empty())
-                .map(<[u8]>::to_vec),
-        );
-    }
-    Ok(entries)
-}
-
-/// Whether `entry`, a key and its value, is one that `gh` or `git push`
-/// write: the branch a branch is pushed to, and the remotes `gh` adds and
-/// marks, by URLs that run nothing.
-fn written_by_gh(entry: &[u8]) -> bool {
-    let entry = String::from_utf8_lossy(entry);
-    let (key, value) = entry.split_once('\n').unwrap_or((&entry, ""));
-    let (Some((section, _)), Some((_, name))) = (key.split_once('.'), key.rsplit_once('.')) else {
-        return false;
+/// What the file `path` lists as allowed always: its lines, but blank ones
+/// and comments.
+fn allowed(path: &Path) -> io::Result<HashSet<String>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => return Err(at(path, e)),
     };
-    match (section, name) {
-        ("branch", "remote" | "merge" | "pushremote" | "gh-merge-base") => true,
-        ("remote", "fetch" | "gh-resolved") => true,
-        ("remote", "url" | "pushurl") => ["https://", "ssh://", "git@"]
-            .iter()
-            .any(|scheme| value.starts_with(scheme)),
-        _ => false,
-    }
+    Ok(contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect())
 }
 
-/// Asks you `question`, with a dialog, or the program `CONFINE_ASK` names,
-/// offering to allow once, and, if `always` is given, with it as the label.
-fn ask(question: &str, always: Option<&str>) -> io::Result<Answer> {
-    if let Some(program) = env::var_os(ASK) {
-        let out = Command::new(&program).arg(question).output()?;
-        return Ok(match String::from_utf8_lossy(&out.stdout).trim() {
-            "once" => Answer::Once,
-            "always" if always.is_some() => Answer::Always,
-            "always" => Answer::Once,
-            _ => Answer::Deny,
-        });
+/// Adds `always` to the file `path` of what is allowed always.
+fn remember(path: &Path, always: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| at(parent, e))?;
     }
-    // The question and the label are arguments, so they need no quoting.
-    // Deny is the default, and what a dialog left unanswered gives.
-    let script = r#"on run argv
-        set choices to {"Deny", "Allow once"}
-        if (count of argv) > 1 then set end of choices to item 2 of argv
-        display dialog (item 1 of argv) with title "confine" buttons choices ¬
-            default button "Deny" cancel button "Deny" with icon caution ¬
-            giving up after 300
-        return button returned of result
-    end run"#;
-    let out = Command::new("/usr/bin/osascript")
-        .arg("-e")
-        .arg(script)
-        .arg(question)
-        .args(always)
-        .stderr(Stdio::null())
-        .output()?;
-    let answer = String::from_utf8_lossy(&out.stdout);
-    Ok(match answer.trim() {
-        "Allow once" => Answer::Once,
-        answer if Some(answer) == always => Answer::Always,
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| at(path, e))?;
+    writeln!(file, "{always}").map_err(|e| at(path, e))
+}
+
+/// Asks you whether to let `tool` run `line`, from the command confined to
+/// `dir`, in `cwd`, with a dialog, or `question`, with the program
+/// `CONFINE_ASK` names, offering to allow once, and, if `always` is given,
+/// always so.
+fn ask(
+    question: &str,
+    tool: &str,
+    line: &str,
+    dir: &Path,
+    cwd: &Path,
+    always: Option<&str>,
+) -> io::Result<Answer> {
+    let out = match env::var_os(ASK) {
+        Some(program) => Command::new(&program).arg(question).output()?,
+        // What the dialog shows is given as arguments, so it needs no
+        // quoting.
+        None => Command::new("/usr/bin/osascript")
+            .args(["-l", "JavaScript", "-e", DIALOG, tool, line])
+            .arg(dir)
+            .arg(cwd)
+            .arg(TIMEOUT.to_string())
+            .args(always)
+            .stderr(Stdio::null())
+            .output()?,
+    };
+    Ok(match String::from_utf8_lossy(&out.stdout).trim() {
+        "once" => Answer::Once,
+        "always" if always.is_some() => Answer::Always,
+        "always" => Answer::Once,
         _ => Answer::Deny,
     })
 }
 
-/// `gh` and `args` as a shell would take them, with what is not plain
+/// `name` and `args` as a shell would take them, with what is not plain
 /// quoted, and control characters escaped, so that you see each argument as
 /// it is.
-fn quoted(args: &[&str]) -> String {
-    let mut line = String::from("gh");
+fn quoted(name: &str, args: &[&str]) -> String {
+    let mut line = String::from(name);
     for arg in args {
         line.push(' ');
         let plain = |b: u8| b.is_ascii_alphanumeric() || b"%+,-./:=@_".contains(&b);
@@ -472,32 +429,37 @@ fn quoted(args: &[&str]) -> String {
     line
 }
 
-/// Whether this process is the shim: `confine` run as `gh` by a confined
-/// command.
+/// Whether this process is a shim: `confine` run under a tool's name by a
+/// confined command.
 pub fn is_shim() -> bool {
     env::var_os(SOCKET).is_some()
-        && env::args_os()
-            .next()
-            .is_some_and(|arg0| Path::new(&arg0).file_name() == Some(OsStr::new("gh")))
+        && shim_name().is_some_and(|name| TOOLS.iter().any(|tool| tool.name() == name))
 }
 
-/// Runs as the shim: has the broker run `gh`, and exits as it did.
+/// The name this process was run under.
+fn shim_name() -> Option<OsString> {
+    let arg0 = env::args_os().next()?;
+    Path::new(&arg0).file_name().map(OsString::from)
+}
+
+/// Runs as a shim: has the broker run the tool, and exits as it did.
 pub fn shim() -> ExitCode {
-    match request() {
+    let name = shim_name().unwrap_or_default();
+    match request(&name) {
         Ok(status) => ExitCode::from(status as u8),
         Err(e) => {
-            eprintln!("gh: confine: {e}");
+            eprintln!("{}: confine: {e}", name.to_string_lossy());
             ExitCode::FAILURE
         }
     }
 }
 
-/// Sends the broker the standard streams, the working directory and the
-/// arguments, and returns the exit status it sends back.
-fn request() -> io::Result<i32> {
+/// Sends the broker the standard streams, `name`, the working directory and
+/// the arguments, and returns the exit status it sends back.
+fn request(name: &OsString) -> io::Result<i32> {
     let mut stream = UnixStream::connect(env::var_os(SOCKET).unwrap_or_default())?;
     send_fds(&stream, &[0, 1, 2])?;
-    let mut request = vec![env::current_dir()?.into_os_string()];
+    let mut request = vec![name.clone(), env::current_dir()?.into_os_string()];
     request.extend(env::args_os().skip(1));
     write_strings(&mut stream, &request)?;
     let mut status = [0; 4];
@@ -562,7 +524,7 @@ fn receive_fds(stream: &UnixStream) -> io::Result<Vec<OwnedFd>> {
                 let data = libc::CMSG_DATA(cmsg).cast::<RawFd>();
                 for i in 0..count {
                     let fd = data.add(i).read_unaligned();
-                    // So that the `gh` run for another request gets none of
+                    // So that a tool run for another request gets none of
                     // these. macOS has no flag to receive them so.
                     libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
                     fds.push(OwnedFd::from_raw_fd(fd));
@@ -622,17 +584,6 @@ fn find(name: &str) -> Option<PathBuf> {
         })
 }
 
-/// Clones the directory tree at `from` to `to`, sharing its blocks.
-fn clonefile(from: &Path, to: &Path) -> io::Result<()> {
-    let from = std::ffi::CString::new(from.as_os_str().as_bytes())?;
-    let to = std::ffi::CString::new(to.as_os_str().as_bytes())?;
-    // `CLONE_NOFOLLOW`: symbolic links are cloned as links.
-    if unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0x0001) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,20 +591,27 @@ mod tests {
     #[test]
     fn quotes_what_is_not_plain() {
         assert_eq!(
-            quoted(&["pr", "create", "--title", "it's", "a\nb", ""]),
+            quoted("gh", &["pr", "create", "--title", "it's", "a\nb", ""]),
             r"gh pr create --title 'it'\''s' $'a\nb' ''"
         );
     }
 
     #[test]
-    fn allows_only_what_gh_writes() {
-        assert!(written_by_gh(b"branch.fix/a.b.remote\norigin"));
-        assert!(written_by_gh(
-            b"remote.fork.url\nhttps://github.com/a/b.git"
-        ));
-        assert!(!written_by_gh(b"remote.fork.url\n/tmp/x"));
-        assert!(!written_by_gh(b"remote.origin.uploadpack\nsh -c x"));
-        assert!(!written_by_gh(b"core.pager\nsh -c x"));
-        assert!(!written_by_gh(b"include.path\n/tmp/x"));
+    fn reads_what_is_allowed_always() {
+        let dir = env::temp_dir().join(format!("confine-allowed-{}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("confine/allow");
+        assert!(allowed(&path).unwrap().is_empty());
+        remember(&path, "gh pr create").unwrap();
+        fs::write(
+            &path,
+            fs::read_to_string(&path).unwrap() + "\n# x\n  gh pr view \n",
+        )
+        .unwrap();
+        assert_eq!(
+            allowed(&path).unwrap(),
+            HashSet::from(["gh pr create".to_string(), "gh pr view".to_string()])
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

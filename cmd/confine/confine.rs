@@ -9,6 +9,8 @@ mod broker;
 mod darwin;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod tools;
 
 #[cfg(target_os = "macos")]
 use darwin as os;
@@ -84,8 +86,8 @@ struct Args {
     #[argh(switch)]
     rm: bool,
 
-    /// do not run gh for the command when it asks to, as there is no one to
-    /// ask whether to
+    /// do not ask whether to run tools such as gh outside the sandbox for the
+    /// command, and so never run them
     #[argh(switch)]
     headless: bool,
 
@@ -184,7 +186,7 @@ fn confine(args: &Args) -> io::Result<Ran> {
         } else {
             // The command can still run without it, as with `--headless`.
             broker::Broker::start(&dir, &home).unwrap_or_else(|e| {
-                eprintln!("confine: gh is not brokered: {e}");
+                eprintln!("confine: cannot ask to run tools outside the sandbox: {e}");
                 None
             })
         };
@@ -194,8 +196,12 @@ fn confine(args: &Args) -> io::Result<Ran> {
             .map(broker::Broker::env)
             .transpose()?
             .unwrap_or_default();
+        // Tools are run outside the sandbox only on macOS, for now.
         #[cfg(not(target_os = "macos"))]
-        let env = Vec::new();
+        let env = {
+            let _ = args.headless;
+            Vec::new()
+        };
         let wait = args.rm || !env.is_empty();
         run(&command, &dir, &writable, &readable, &hidden, &env, wait)
     })();

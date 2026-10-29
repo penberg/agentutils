@@ -430,11 +430,7 @@ fn does_not_run_gh_if_denied() {
     let out = brokered(&world, &dir, "gh pr create");
     assert_eq!(out.status.code(), Some(1));
     assert!(stdout(&out).is_empty());
-    assert!(
-        stderr(&out).contains("you did not allow it"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("not allowed"), "{}", stderr(&out));
 }
 
 #[test]
@@ -444,9 +440,32 @@ fn asks_once_for_what_is_always_allowed() {
     let (world, dir) = broker_world("always");
     let out = brokered(&world, &dir, "gh pr create && gh pr create && gh pr view");
     assert!(out.status.success(), "{}", stderr(&out));
-    let asked = asked(&world);
-    assert_eq!(asked.len(), 2, "{asked:?}");
-    assert!(asked[1].contains("gh pr view"));
+    let questions = asked(&world);
+    assert_eq!(questions.len(), 2, "{questions:?}");
+    assert!(questions[1].contains("gh pr view"));
+    let config = world.home().join(".config/confine");
+    assert_eq!(read(&config, "allow"), "gh pr create\ngh pr view\n");
+    // And is remembered the next time.
+    let out = brokered(&world, &dir, "gh pr create --title again");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(asked(&world).len(), 2);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn the_command_cannot_allow_itself_always() {
+    need_sandbox!();
+    let (world, dir) = broker_world("deny");
+    let config = world.home().join(".config/confine");
+    write(&config, "allow", "gh pr view\n");
+    let out = brokered(
+        &world,
+        &dir,
+        "echo 'gh pr create' >> ~/.config/confine/allow || cat ~/.config/confine/allow",
+    );
+    assert!(!out.status.success());
+    assert!(stdout(&out).is_empty());
+    assert_eq!(read(&config, "allow"), "gh pr view\n");
 }
 
 #[test]
@@ -474,7 +493,7 @@ fn does_not_run_gh_with_git_configured_to_run_programs() {
         assert_eq!(out.status.code(), Some(1), "{cmd}");
         assert!(stdout(&out).is_empty(), "{cmd}: {}", stdout(&out));
         assert!(
-            stderr(&out).contains("so gh is not run"),
+            stderr(&out).contains("so it is not run"),
             "{}",
             stderr(&out)
         );

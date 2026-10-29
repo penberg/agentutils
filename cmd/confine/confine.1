@@ -71,7 +71,7 @@ whether to, so that
 .B gh
 fails in the sandbox.
 See
-.BR "THE BROKER" .
+.BR "ASKING TO RUN OUTSIDE THE SANDBOX" .
 .TP
 .BI \-d " dir" "\fR, \fP\-\-dir " dir
 Run the command in
@@ -160,7 +160,7 @@ read, and files made in the directories above the home directory after the
 command starts cannot be read.
 .PP
 The network and the GPU are not confined.
-.SH THE BROKER
+.SH ASKING TO RUN OUTSIDE THE SANDBOX
 On macOS, if
 .BR gh (1)
 is installed, the command can open pull requests and the like though it
@@ -174,17 +174,23 @@ first on its
 .BR PATH .
 When the command runs it,
 .B confine
-shows a dialog with the command line, and runs the real
+asks you, with a dialog that shows the command line, and runs the real
 .BR gh ,
 found on
 .BR confine 's
 own
 .BR PATH ,
 with the command's standard input and output, only if you allow it: once,
-or always, until
-.B confine
-exits, for that command, such as
-.BR "gh pr create" .
+or always for that command, such as
+.BR "gh pr create" ,
+which is kept in
+.IR ~/.config/confine/allow .
+The dialog denies by itself if no one answers it in 10 seconds, so that a
+command no one is watching is not kept waiting, and denies if Return is
+pressed.
+The command is told it was not allowed, and
+.B gh
+exits with 1.
 .B gh api
 is asked about every time, and
 .BR "gh auth" ,
@@ -223,6 +229,16 @@ The clone then replaces
 so that what
 .B gh
 changed there is kept.
+.SH FILES
+.TP
+.I ~/.config/confine/allow
+The commands you allowed always, one per line, such as
+.BR "gh pr create" ;
+blank lines and lines that start with
+.B #
+are left out.
+Remove a line to be asked again.
+The confined command can neither read nor write it.
 .SH ENVIRONMENT
 .B confine
 sets
