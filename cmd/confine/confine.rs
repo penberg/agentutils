@@ -4,6 +4,8 @@
 //! the home directory only what it needs, and so no secrets such as SSH keys.
 
 #[cfg(target_os = "macos")]
+mod broker;
+#[cfg(target_os = "macos")]
 mod darwin;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -17,7 +19,9 @@ use linux as os;
 compile_error!("confine runs only on macOS and Linux for now");
 
 use std::{
-    env, io,
+    env,
+    ffi::OsString,
+    io,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{ExitCode, ExitStatus},
@@ -80,6 +84,11 @@ struct Args {
     #[argh(switch)]
     rm: bool,
 
+    /// do not run gh for the command when it asks to, as there is no one to
+    /// ask whether to
+    #[argh(switch)]
+    headless: bool,
+
     /// the command to run and its arguments; the shell if none
     #[argh(positional, greedy)]
     command: Vec<String>,
@@ -94,6 +103,10 @@ enum Ran {
 }
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "macos")]
+    if broker::is_shim() {
+        return broker::shim();
+    }
     let args: Args = argh::from_env();
     if args.rm && args.dir.is_some() {
         eprintln!("confine: --rm removes a fork, and -d runs the command without one");
@@ -145,20 +158,49 @@ fn confine(args: &Args) -> io::Result<Ran> {
     } else {
         args.command.clone()
     };
-    if let Some(dir) = &args.dir {
-        let dir = dir.canonicalize().map_err(|e| at(dir, e))?;
-        if !dir.is_dir() {
-            return Err(io::Error::other(format!(
-                "{}: not a directory",
-                dir.display()
-            )));
+    let (dir, fork) = match &args.dir {
+        Some(dir) => {
+            let dir = dir.canonicalize().map_err(|e| at(dir, e))?;
+            if !dir.is_dir() {
+                return Err(io::Error::other(format!(
+                    "{}: not a directory",
+                    dir.display()
+                )));
+            }
+            (dir, None)
         }
-        return run(&command, &dir, &writable, &readable, &hidden, false);
-    }
-    let fork = fsfork::fork(Path::new("."))?;
-    eprintln!("confine: forked to {}", fork.display());
-    let ran = run(&command, &fork, &writable, &readable, &hidden, args.rm);
-    if (args.rm || !matches!(ran, Ok(Ran::Exited(_))))
+        None => {
+            let fork = fsfork::fork(Path::new("."))?;
+            eprintln!("confine: forked to {}", fork.display());
+            (fork.clone(), Some(fork))
+        }
+    };
+    // The broker serves the command while `confine` waits for it, and stops
+    // when it is dropped, after.
+    let ran = (|| {
+        #[cfg(target_os = "macos")]
+        let broker = if args.headless {
+            None
+        } else {
+            // The command can still run without it, as with `--headless`.
+            broker::Broker::start(&dir, &home).unwrap_or_else(|e| {
+                eprintln!("confine: gh is not brokered: {e}");
+                None
+            })
+        };
+        #[cfg(target_os = "macos")]
+        let env = broker
+            .as_ref()
+            .map(broker::Broker::env)
+            .transpose()?
+            .unwrap_or_default();
+        #[cfg(not(target_os = "macos"))]
+        let env = Vec::new();
+        let wait = args.rm || !env.is_empty();
+        run(&command, &dir, &writable, &readable, &hidden, &env, wait)
+    })();
+    if let Some(fork) = fork
+        && (args.rm || !matches!(ran, Ok(Ran::Exited(_))))
         && let Err(e) = fsfork::remove(&fork)
     {
         eprintln!("confine: {e}");
@@ -166,20 +208,24 @@ fn confine(args: &Args) -> io::Result<Ran> {
     ran
 }
 
-/// Runs `command` in `dir`, confined to it: in place of this process, or,
-/// to `wait` for it, as a child.
+/// Runs `command` in `dir`, confined to it, with `env` added to its
+/// environment: in place of this process, or, to `wait` for it, as a child.
 fn run(
     command: &[String],
     dir: &Path,
     writable: &[PathBuf],
     readable: &[PathBuf],
     hidden: &[PathBuf],
+    env: &[(&str, OsString)],
     wait: bool,
 ) -> io::Result<Ran> {
     let mut confined = os::confine(command, dir, writable, readable, hidden)?;
     // Claude Code would otherwise ask whether to trust every new directory,
     // and accepting would write to `~/.claude.json`, which it may not.
-    confined.current_dir(dir).env("CLAUDE_CODE_SANDBOXED", "1");
+    confined
+        .current_dir(dir)
+        .env("CLAUDE_CODE_SANDBOXED", "1")
+        .envs(env.iter().map(|(key, value)| (key, value)));
     if !wait {
         return Ok(Ran::Failed(confined.exec()));
     }
