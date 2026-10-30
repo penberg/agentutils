@@ -4,7 +4,7 @@ Small UNIX tools for letting a coding agent, or anything else you would
 rather not trust with your files, work on a directory:
 
 - **`fsfork`** forks a directory: it makes a copy-on-write clone of it, and
-  prints where it is.
+  starts a shell there, or prints where it is.
 - **`confine`** runs a command in a fork of the working directory, or in a
   directory, that may write only there, and cannot read secrets.
 - **`fsdiff`** shows what changed in a fork since it was made, as a patch.
@@ -79,6 +79,12 @@ and to its base, `.turso.1.base`, which keeps what the directory was when it
 was forked. The fork is cloned from the base, so that the two are the same
 whatever changes in the directory meanwhile. With no arguments, it forks the
 working directory; given one, that directory; given two, to the second.
+
+On a terminal, it then starts your shell in the fork, and `exit` comes back.
+When stdin or stdout is not a terminal, or with `--print`, it prints the fork's
+path instead, so `cd $(fsfork)` goes there in the shell you are in. A script
+run from a terminal is on that terminal too, so it should capture the path or
+give `--print`.
 
 A fork is the directory as it is, the repository and uncommitted changes
 included, but for what `.gitignore` files ignore and git does not track, such

@@ -4,6 +4,7 @@ fsfork \- fork a directory: make a copy-on-write clone of it
 .SH SYNOPSIS
 .B fsfork
 .RB [ \-\-no\-ignore ]
+.RB [ \-\-print ]
 .RI [ dir
 .RI [ fork ]]
 .SH DESCRIPTION
@@ -11,9 +12,21 @@ fsfork \- fork a directory: make a copy-on-write clone of it
 makes a copy-on-write clone of
 .IR dir ,
 or of the working directory if none is given: the fork.
-It prints the fork's path, and nothing else, so that
+.PP
+On a terminal, it says on standard error where the fork is, and becomes your
+shell
+.RB ( $SHELL ,
+or
+.I /bin/sh
+if unset) in the fork; exit the shell to come back.
+If standard input or standard output is not a terminal, or with
+.BR \-\-print ,
+it prints the fork's path instead, and nothing else, so that
 .B cd $(fsfork)
 goes there.
+A script run from a terminal is on that terminal too, so it should capture the
+path or give
+.BR \-\-print .
 .PP
 The fork is the directory as it is, hidden files, the git repository, and
 uncommitted changes included, but for what
@@ -89,11 +102,22 @@ In a subdirectory of a repository, it forks the subdirectory.
 .B \-\-no\-ignore
 Fork what is ignored too, so that builds in the fork start warm.
 Making it takes longer if what is ignored holds many files.
+.TP
+.B \-\-print
+Print the fork's path, even on a terminal, rather than start a shell there.
 .SH EXIT STATUS
-0 if the directory was forked, and 1 otherwise, having made neither the
-fork nor the base.
+0 if the directory was forked and its path printed, and 1 otherwise, having
+made neither the fork nor the base.
+On a terminal, the status of the shell, or 1, having made neither, if the shell
+cannot be run.
 .SH EXAMPLES
-Fork the working directory, and go there:
+Fork the working directory, and work in the fork in a shell of its own:
+.PP
+.RS
+.B fsfork
+.RE
+.PP
+Fork the working directory, and go there in this shell:
 .PP
 .RS
 .B cd $(fsfork)
@@ -107,7 +131,7 @@ with its base in
 .IR .parser.base :
 .PP
 .RS
-.B fsfork turso parser
+.B fsfork \-\-print turso parser
 .RE
 .PP
 List the forks of
