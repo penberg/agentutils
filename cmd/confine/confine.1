@@ -7,6 +7,7 @@ confine \- run a command that may write only to a fork of a directory
 .IR path ]...
 .RB [ \-r
 .IR path ]...
+.RB [ \-\-skip\-ignored ]
 .RB [ \-\-rm | \-d
 .IR dir ]
 .RI [ command
@@ -74,6 +75,19 @@ been made.
 It cannot be given with
 .BR \-d ,
 as there is no fork to remove.
+.TP
+.B \-\-skip\-ignored
+Leave out of the fork what
+.I .gitignore
+files ignore and
+.BR git (1)
+does not track, as
+.B fsfork \-\-skip\-ignored
+does: see
+.BR fsfork (1).
+It cannot be given with
+.BR \-d ,
+as there is no fork.
 .TP
 .BI \-r " path" "\fR, \fP\-\-read " path
 Let the command read

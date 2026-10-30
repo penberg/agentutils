@@ -24,6 +24,7 @@ use std::{
 };
 
 use argh::FromArgs;
+use fsfork::Contents;
 
 /// Directories under the home directory that the command may write to, so
 /// that builds and package managers keep working.
@@ -80,6 +81,11 @@ struct Args {
     #[argh(switch)]
     rm: bool,
 
+    /// leave out of the fork what .gitignore files ignore, unless it is
+    /// tracked
+    #[argh(switch)]
+    skip_ignored: bool,
+
     /// the command to run and its arguments; the shell if none
     #[argh(positional, greedy)]
     command: Vec<String>,
@@ -97,6 +103,12 @@ fn main() -> ExitCode {
     let args: Args = argh::from_env();
     if args.rm && args.dir.is_some() {
         eprintln!("confine: --rm removes a fork, and -d runs the command without one");
+        return ExitCode::FAILURE;
+    }
+    if args.skip_ignored && args.dir.is_some() {
+        eprintln!(
+            "confine: --skip-ignored leaves things out of a fork, and -d runs the command without one"
+        );
         return ExitCode::FAILURE;
     }
     let e = match confine(&args) {
@@ -155,7 +167,12 @@ fn confine(args: &Args) -> io::Result<Ran> {
         }
         return run(&command, &dir, &writable, &readable, &hidden, false);
     }
-    let fork = fsfork::fork(Path::new("."))?;
+    let contents = if args.skip_ignored {
+        Contents::NotIgnored
+    } else {
+        Contents::Everything
+    };
+    let fork = fsfork::fork(Path::new("."), contents)?;
     eprintln!("confine: forked to {}", fork.display());
     let ran = run(&command, &fork, &writable, &readable, &hidden, args.rm);
     if (args.rm || !matches!(ran, Ok(Ran::Exited(_))))

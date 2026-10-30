@@ -10,10 +10,15 @@ use std::{
 };
 
 use argh::FromArgs;
+use fsfork::Contents;
 
 /// Fork a directory: make a copy-on-write clone of it, and print where it is.
 #[derive(FromArgs)]
 struct Args {
+    /// leave out what .gitignore files ignore, unless it is tracked
+    #[argh(switch)]
+    skip_ignored: bool,
+
     /// the directory to fork, the working directory if none; then where to
     /// put the fork, which must not exist, or next to the directory, named
     /// after it and the first number not taken, if not given
@@ -42,10 +47,15 @@ fn main() -> ExitCode {
 
 /// Forks the directory `args` give, and returns where the fork is.
 fn fsfork(args: Args) -> io::Result<PathBuf> {
+    let contents = if args.skip_ignored {
+        Contents::NotIgnored
+    } else {
+        Contents::Everything
+    };
     match &args.paths[..] {
-        [] => fsfork::fork(Path::new(".")),
-        [dir] => fsfork::fork(dir),
-        [dir, fork] => fsfork::fork_to(dir, fork),
+        [] => fsfork::fork(Path::new("."), contents),
+        [dir] => fsfork::fork(dir, contents),
+        [dir, fork] => fsfork::fork_to(dir, fork, contents),
         _ => Err(io::Error::other(
             "too many arguments: a directory, and a fork",
         )),

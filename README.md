@@ -69,7 +69,7 @@ They run on macOS and Linux.
 - Linux: Linux 5.19 or later, with Landlock enabled, for `confine`. A file
   system that can share blocks between files, such as Btrfs or XFS, for
   `fsfork`; on others, a fork is a full copy.
-- `git`, for `fsdiff`.
+- `git`, for `fsdiff` and `--skip-ignored`.
 
 ## fsfork
 
@@ -85,7 +85,12 @@ made with `clonefile`, and on Linux with `cp --reflink`, so it takes no
 space until either side is written to.
 
 `fsfork` knows nothing about git: it forks exactly the directory it is
-given.
+given. The exception is `--skip-ignored`, for `fsfork` and `confine`, which
+leaves out what `.gitignore` files ignore and git does not track, such as
+`target` or `node_modules`. The fork is quicker to make if those hold many
+files, and builds in it start cold. Git runs in a repository of `fsfork`'s
+own, as with `fsdiff`, so the directory's configuration cannot make it run
+anything.
 
 ## fsdiff
 
