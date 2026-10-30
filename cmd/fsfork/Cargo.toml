@@ -12,3 +12,6 @@ path = "fsfork.rs"
 [dependencies]
 argh.workspace = true
 fsfork.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
