@@ -15,9 +15,9 @@ use fsfork::Contents;
 /// Fork a directory: make a copy-on-write clone of it, and print where it is.
 #[derive(FromArgs)]
 struct Args {
-    /// leave out what .gitignore files ignore, unless it is tracked
+    /// fork what .gitignore files ignore too, which is otherwise left out
     #[argh(switch)]
-    skip_ignored: bool,
+    no_ignore: bool,
 
     /// the directory to fork, the working directory if none; then where to
     /// put the fork, which must not exist, or next to the directory, named
@@ -47,10 +47,10 @@ fn main() -> ExitCode {
 
 /// Forks the directory `args` give, and returns where the fork is.
 fn fsfork(args: Args) -> io::Result<PathBuf> {
-    let contents = if args.skip_ignored {
-        Contents::NotIgnored
-    } else {
+    let contents = if args.no_ignore {
         Contents::Everything
+    } else {
+        Contents::NotIgnored
     };
     match &args.paths[..] {
         [] => fsfork::fork(Path::new("."), contents),

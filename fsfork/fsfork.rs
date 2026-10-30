@@ -104,9 +104,16 @@ fn clone(dir: &Path, fork: &Path, contents: Contents) -> io::Result<()> {
 }
 
 /// Clones `dir` to `to`, which must not exist, without what is ignored in it,
-/// and leaves nothing if it fails.
+/// or with it if that cannot be told, and leaves nothing if it fails.
 fn clone_not_ignored(dir: &Path, to: &Path) -> io::Result<()> {
-    let ignored = ignored::ignored(dir)?;
+    // A fork with too much in it works, so this is no reason not to make one.
+    let ignored = match ignored::ignored(dir) {
+        Ok(ignored) => ignored,
+        Err(e) => {
+            eprintln!("fsfork: cannot tell what is ignored, so forking everything: {e}");
+            return os::clone(dir, to);
+        }
+    };
     if ignored.paths.is_empty() {
         return os::clone(dir, to);
     }

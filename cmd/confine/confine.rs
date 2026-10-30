@@ -81,10 +81,9 @@ struct Args {
     #[argh(switch)]
     rm: bool,
 
-    /// leave out of the fork what .gitignore files ignore, unless it is
-    /// tracked
+    /// fork what .gitignore files ignore too, which is otherwise left out
     #[argh(switch)]
-    skip_ignored: bool,
+    no_ignore: bool,
 
     /// the command to run and its arguments; the shell if none
     #[argh(positional, greedy)]
@@ -105,9 +104,9 @@ fn main() -> ExitCode {
         eprintln!("confine: --rm removes a fork, and -d runs the command without one");
         return ExitCode::FAILURE;
     }
-    if args.skip_ignored && args.dir.is_some() {
+    if args.no_ignore && args.dir.is_some() {
         eprintln!(
-            "confine: --skip-ignored leaves things out of a fork, and -d runs the command without one"
+            "confine: --no-ignore is about what is in a fork, and -d runs the command without one"
         );
         return ExitCode::FAILURE;
     }
@@ -167,10 +166,10 @@ fn confine(args: &Args) -> io::Result<Ran> {
         }
         return run(&command, &dir, &writable, &readable, &hidden, false);
     }
-    let contents = if args.skip_ignored {
-        Contents::NotIgnored
-    } else {
+    let contents = if args.no_ignore {
         Contents::Everything
+    } else {
+        Contents::NotIgnored
     };
     let fork = fsfork::fork(Path::new("."), contents)?;
     eprintln!("confine: forked to {}", fork.display());

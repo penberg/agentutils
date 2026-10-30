@@ -73,16 +73,17 @@ fn forks_to_the_path_given() {
 }
 
 #[test]
-fn copies_everything_in_the_directory_as_it_is() {
+fn copies_everything_in_the_directory_as_it_is_with_no_ignore() {
     let world = World::new();
     let dir = world.project();
+    write(&dir, ".gitignore", "target/\n");
     write(&dir, ".hidden", "hidden\n");
     write(&dir, ".git/config", "config\n");
     write(&dir, "target/out", "built\n");
     write(&dir, "run", "#!/bin/sh\n");
     fs::set_permissions(dir.join("run"), fs::Permissions::from_mode(0o755)).unwrap();
     symlink("a", dir.join("link")).unwrap();
-    let fork = PathBuf::from(stdout(&fsfork(&dir, &[])).trim_end());
+    let fork = PathBuf::from(stdout(&fsfork(&dir, &["--no-ignore"])).trim_end());
     assert_eq!(read(&fork, ".hidden"), "hidden\n");
     assert_eq!(read(&fork, ".git/config"), "config\n");
     assert_eq!(read(&fork, "target/out"), "built\n");
@@ -92,7 +93,7 @@ fn copies_everything_in_the_directory_as_it_is() {
 }
 
 #[test]
-fn leaves_out_what_gitignore_files_ignore_with_skip_ignored() {
+fn leaves_out_what_gitignore_files_ignore() {
     let world = World::new();
     let dir = world.project();
     write(&dir, ".gitignore", "target/\n*.log\nbuild/*\n!build/keep\n");
@@ -106,7 +107,7 @@ fn leaves_out_what_gitignore_files_ignore_with_skip_ignored() {
     fs::create_dir(dir.join("empty")).unwrap();
     symlink("a", dir.join("kept/link")).unwrap();
     fs::set_permissions(dir.join("kept"), fs::Permissions::from_mode(0o750)).unwrap();
-    let out = fsfork(&dir, &["--skip-ignored"]);
+    let out = fsfork(&dir, &[]);
     assert!(out.status.success(), "{}", stderr(&out));
     for tree in [world.path("project.1"), world.path(".project.1.base")] {
         assert_eq!(read(&tree, "a"), "one\n");
@@ -135,7 +136,7 @@ fn leaves_out_what_gitignore_files_ignore_with_skip_ignored() {
 }
 
 #[test]
-fn keeps_tracked_files_and_the_repository_with_skip_ignored() {
+fn keeps_tracked_files_and_the_repository() {
     let world = World::new();
     let dir = world.project();
     git(&dir, &["init", "--quiet"]);
@@ -144,7 +145,7 @@ fn keeps_tracked_files_and_the_repository_with_skip_ignored() {
     write(&dir, "tracked/other", "ignored\n");
     git(&dir, &["add", ".gitignore"]);
     git(&dir, &["add", "--force", "tracked/forced"]);
-    let fork = PathBuf::from(stdout(&fsfork(&dir, &["--skip-ignored"])).trim_end());
+    let fork = PathBuf::from(stdout(&fsfork(&dir, &[])).trim_end());
     assert_eq!(read(&fork, "tracked/forced"), "tracked\n");
     assert!(!fork.join("tracked/other").exists());
     assert!(!fork.join("a").exists());
@@ -174,7 +175,7 @@ fn skips_what_is_ignored_in_a_subdirectory_and_a_worktree_of_a_repository() {
             "c",
         ],
     );
-    let fork = PathBuf::from(stdout(&fsfork(&dir.join("sub"), &["--skip-ignored"])).trim_end());
+    let fork = PathBuf::from(stdout(&fsfork(&dir.join("sub"), &[])).trim_end());
     assert_eq!(read(&fork, "c"), "c\n");
     assert_eq!(read(&fork, "forced.o"), "tracked\n");
     assert!(!fork.join("x.o").exists());
@@ -184,13 +185,13 @@ fn skips_what_is_ignored_in_a_subdirectory_and_a_worktree_of_a_repository() {
         &["worktree", "add", "--quiet", worktree.to_str().unwrap()],
     );
     write(&worktree, "sub/y.o", "ignored\n");
-    let fork = PathBuf::from(stdout(&fsfork(&worktree, &["--skip-ignored"])).trim_end());
+    let fork = PathBuf::from(stdout(&fsfork(&worktree, &[])).trim_end());
     assert_eq!(read(&fork, "sub/forced.o"), "tracked\n");
     assert!(!fork.join("sub/y.o").exists());
 }
 
 #[test]
-fn skip_ignored_takes_fifos_and_sockets_beside_what_is_ignored() {
+fn takes_fifos_and_sockets_beside_what_is_ignored() {
     let world = World::new();
     let dir = world.project();
     write(&dir, ".gitignore", "target/\n");
@@ -206,7 +207,7 @@ fn skip_ignored_takes_fifos_and_sockets_beside_what_is_ignored() {
     let socket = UnixListener::bind(short.join("sock"));
     fs::remove_file(&short).unwrap();
     let _socket = socket.unwrap();
-    let out = fsfork(&dir, &["--skip-ignored"]);
+    let out = fsfork(&dir, &[]);
     assert!(out.status.success(), "{}", stderr(&out));
     let fork = world.path("project.1");
     let pipe = fork.join("pipe").symlink_metadata().unwrap();
@@ -224,13 +225,29 @@ fn a_directory_that_is_ignored_itself_goes_by_its_own_gitignore_files() {
     write(&dir, "vendor/lib/src", "src\n");
     write(&dir, "vendor/lib/out/o", "built\n");
     let lib = dir.join("vendor/lib");
-    let fork = PathBuf::from(stdout(&fsfork(&lib, &["--skip-ignored"])).trim_end());
+    let fork = PathBuf::from(stdout(&fsfork(&lib, &[])).trim_end());
     assert_eq!(read(&fork, "src"), "src\n");
     assert!(!fork.join("out").exists());
 }
 
 #[test]
-fn skip_ignored_does_not_run_what_the_repository_configures() {
+fn forks_everything_and_says_so_if_git_cannot_tell_what_is_ignored() {
+    let world = World::new();
+    let dir = world.project();
+    git(&dir, &["init", "--quiet"]);
+    write(&dir, ".gitignore", "target/\n");
+    write(&dir, "target/out", "built\n");
+    write(&dir, ".git/index", "not an index\n");
+    let out = fsfork(&dir, &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let fork = world.path("project.1");
+    assert_eq!(stdout(&out), format!("{}\n", fork.display()));
+    assert!(stderr(&out).contains("forking everything"));
+    assert_eq!(read(&fork, "target/out"), "built\n");
+}
+
+#[test]
+fn does_not_run_what_the_repository_configures() {
     let world = World::new();
     let dir = world.project();
     git(&dir, &["init", "--quiet"]);
@@ -248,21 +265,21 @@ fn skip_ignored_does_not_run_what_the_repository_configures() {
         &dir,
         &["config", "core.fsmonitor", monitor.to_str().unwrap()],
     );
-    let out = fsfork(&dir, &["--skip-ignored"]);
+    let out = fsfork(&dir, &[]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!world.path("project.1/target").exists());
     assert!(!ran.exists());
 }
 
 #[test]
-fn fails_with_skip_ignored_if_the_fork_or_its_base_exists() {
+fn fails_if_the_fork_or_its_base_exists_with_something_ignored() {
     let world = World::new();
     let dir = world.project();
     write(&dir, ".gitignore", "target/\n");
     write(&dir, "target/out", "built\n");
     write(&world.path("parser"), "mine", "mine\n");
     write(&world.path(".lexer.base"), "mine", "mine\n");
-    let args = |fork| ["--skip-ignored", "project", fork];
+    let args = |fork| ["project", fork];
     assert_fails(&fsfork(&world.dir, &args("parser")), "exists");
     assert_eq!(read(&world.path("parser"), "mine"), "mine\n");
     assert!(!world.path(".parser.base").exists());

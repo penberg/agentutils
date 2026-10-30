@@ -69,7 +69,8 @@ They run on macOS and Linux.
 - Linux: Linux 5.19 or later, with Landlock enabled, for `confine`. A file
   system that can share blocks between files, such as Btrfs or XFS, for
   `fsfork`; on others, a fork is a full copy.
-- `git`, for `fsdiff` and `--skip-ignored`.
+- `git`, for `fsdiff`, and for `fsfork` to leave out what is ignored; without
+  it, a fork is everything in the directory.
 
 ## fsfork
 
@@ -79,18 +80,17 @@ was forked. The fork is cloned from the base, so that the two are the same
 whatever changes in the directory meanwhile. With no arguments, it forks the
 working directory; given one, that directory; given two, to the second.
 
-A fork is everything in the directory, as it is: the repository,
-uncommitted changes, and build output, so builds start warm. On macOS, it is
+A fork is the directory as it is, the repository and uncommitted changes
+included, but for what `.gitignore` files ignore and git does not track, such
+as `target` or `node_modules`, so that a large directory is still quick to
+fork. Builds in the fork start cold; with `--no-ignore`, for `fsfork` and
+`confine`, what is ignored is forked too, and they start warm. On macOS, it is
 made with `clonefile`, and on Linux with `cp --reflink`, so it takes no
 space until either side is written to.
 
-`fsfork` knows nothing about git: it forks exactly the directory it is
-given. The exception is `--skip-ignored`, for `fsfork` and `confine`, which
-leaves out what `.gitignore` files ignore and git does not track, such as
-`target` or `node_modules`. The fork is quicker to make if those hold many
-files, and builds in it start cold. Git runs in a repository of `fsfork`'s
-own, as with `fsdiff`, so the directory's configuration cannot make it run
-anything.
+`fsfork` asks git what is ignored, in a repository of its own, as `fsdiff`
+does, so the directory's configuration cannot make it run anything. If git
+cannot say, `fsfork` warns and forks everything.
 
 ## fsdiff
 
