@@ -302,6 +302,216 @@ fn fails_for_paths_that_do_not_exist() {
     assert_no_forks(&world);
 }
 
+/// A world with a repository, `project`, a fake `gh` that prints what it was
+/// run with, and an answer, `once`, `always` or `deny`, that you give when
+/// asked whether to run it, which is recorded in `asked`.
+#[cfg(target_os = "macos")]
+fn broker_world(answer: &str) -> (World, PathBuf) {
+    let world = World::new();
+    let dir = world.dir("project");
+    let git = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .env("HOME", world.home())
+        .status()
+        .unwrap();
+    assert!(git.success());
+    let bin = world.dir("bin");
+    write(
+        &bin,
+        "gh",
+        "#!/bin/sh\n\
+         echo \"gh $*\"\n\
+         pwd\n\
+         git config core.hooksPath\n\
+         git config branch.main.remote || true\n",
+    );
+    write(
+        &bin,
+        "ask",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n--\\n' \"$1\" >> {}\necho {answer}\n",
+            world.dir.join("asked").display()
+        ),
+    );
+    for program in ["gh", "ask"] {
+        let path = bin.join(program);
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        fs::set_permissions(&path, perms).unwrap();
+    }
+    (world, dir)
+}
+
+/// Runs `cmd` with `sh -c`, confined to `dir` itself, with `gh` brokered.
+#[cfg(target_os = "macos")]
+fn brokered(world: &World, dir: &Path, cmd: &str) -> Output {
+    let path = format!(
+        "{}:{}",
+        world.dir.join("bin").display(),
+        env::var("PATH").unwrap()
+    );
+    world
+        .confine_command(dir, &["-d", ".", "sh", "-c", cmd])
+        .env("PATH", path)
+        .env("CONFINE_ASK", world.dir.join("bin/ask"))
+        .output()
+        .unwrap()
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn does_not_broker_gh_with_headless() {
+    need_sandbox!();
+    let (world, dir) = broker_world("once");
+    let path = format!(
+        "{}:{}",
+        world.dir.join("bin").display(),
+        env::var("PATH").unwrap()
+    );
+    let out = world
+        .confine_command(
+            &dir,
+            &["--headless", "-d", ".", "sh", "-c", "command -v gh"],
+        )
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        stdout(&out),
+        format!("{}\n", world.dir.join("bin/gh").display())
+    );
+    assert!(asked(&world).is_empty());
+}
+
+/// The questions asked in `world`.
+#[cfg(target_os = "macos")]
+fn asked(world: &World) -> Vec<String> {
+    fs::read_to_string(world.dir.join("asked"))
+        .unwrap_or_default()
+        .split("\n--\n")
+        .filter(|question| !question.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn brokers_gh_once_allowed_with_hooks_off() {
+    need_sandbox!();
+    let (world, dir) = broker_world("once");
+    let out = brokered(
+        &world,
+        &dir,
+        "git config branch.main.remote origin && gh pr create --title \"a b\"",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "gh pr create --title a b\n{}\n/dev/null\norigin\n",
+            dir.display()
+        )
+    );
+    let asked = asked(&world);
+    assert_eq!(asked.len(), 1);
+    assert!(
+        asked[0].contains("gh pr create --title 'a b'"),
+        "{}",
+        asked[0]
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn does_not_run_gh_if_denied() {
+    need_sandbox!();
+    let (world, dir) = broker_world("deny");
+    let out = brokered(&world, &dir, "gh pr create");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).is_empty());
+    assert!(stderr(&out).contains("not allowed"), "{}", stderr(&out));
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn asks_once_for_what_is_always_allowed() {
+    need_sandbox!();
+    let (world, dir) = broker_world("always");
+    let out = brokered(&world, &dir, "gh pr create && gh pr create && gh pr view");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let questions = asked(&world);
+    assert_eq!(questions.len(), 2, "{questions:?}");
+    assert!(questions[1].contains("gh pr view"));
+    let config = world.home().join(".config/confine");
+    assert_eq!(read(&config, "allow"), "gh pr create\ngh pr view\n");
+    // And is remembered the next time.
+    let out = brokered(&world, &dir, "gh pr create --title again");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(asked(&world).len(), 2);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn the_command_cannot_allow_itself_always() {
+    need_sandbox!();
+    let (world, dir) = broker_world("deny");
+    let config = world.home().join(".config/confine");
+    write(&config, "allow", "gh pr view\n");
+    let out = brokered(
+        &world,
+        &dir,
+        "echo 'gh pr create' >> ~/.config/confine/allow || cat ~/.config/confine/allow",
+    );
+    assert!(!out.status.success());
+    assert!(stdout(&out).is_empty());
+    assert_eq!(read(&config, "allow"), "gh pr view\n");
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn never_runs_gh_auth() {
+    need_sandbox!();
+    let (world, dir) = broker_world("always");
+    let out = brokered(&world, &dir, "gh auth token");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).is_empty());
+    assert!(asked(&world).is_empty());
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn does_not_run_gh_with_git_configured_to_run_programs() {
+    need_sandbox!();
+    let (world, dir) = broker_world("once");
+    for cmd in [
+        "git config core.pager 'touch pwned' && gh pr view",
+        "git config remote.x.uploadpack 'touch pwned' && gh pr view",
+        "echo /tmp > .git/commondir && gh pr view",
+    ] {
+        let out = brokered(&world, &dir, cmd);
+        assert_eq!(out.status.code(), Some(1), "{cmd}");
+        assert!(stdout(&out).is_empty(), "{cmd}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("so it is not run"),
+            "{}",
+            stderr(&out)
+        );
+        world.sh(&dir, "rm -rf .git && git init -q");
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn removes_what_the_broker_made() {
+    need_sandbox!();
+    let (world, dir) = broker_world("once");
+    let out = brokered(&world, &dir, "gh pr view");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let state = world.home().join(".local/state/confine");
+    assert_eq!(fs::read_dir(state).unwrap().count(), 0);
+}
+
 /// Whether `sandbox-exec` can run here.
 #[cfg(target_os = "macos")]
 fn sandbox() -> bool {

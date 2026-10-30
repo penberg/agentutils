@@ -34,6 +34,15 @@ Code in the fork. `-w ~/.claude` lets it save its sessions and settings.
 With `--rm`, the fork is removed when Claude Code exits; with `-d dir`,
 there is no fork, and Claude Code runs in `dir` itself.
 
+On macOS, it can open pull requests: when it runs `gh`, a dialog asks you
+whether to, showing the command line, and `confine` runs the real `gh`
+outside the sandbox only if you allow it, once or always. The dialog denies
+by itself after 10 seconds, so an agent no one is watching is not kept
+waiting. With `--headless`, for when no one
+is at the screen to answer, `gh` is not run for it. See
+[`confine.1`](cmd/confine/confine.1) for how git in the fork is kept from
+running anything.
+
 When it is done, see what it changed, apply the changes, and remove the
 fork:
 
