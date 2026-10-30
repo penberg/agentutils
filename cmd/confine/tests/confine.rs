@@ -109,6 +109,34 @@ fn removes_the_fork_after_the_command_with_rm() {
 }
 
 #[test]
+fn leaves_what_is_ignored_out_of_the_fork() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.dir("project");
+    write(&dir, ".gitignore", "target/\n");
+    write(&dir, "a", "a\n");
+    write(&dir, "target/out", "built\n");
+    let out = world.confine(&dir, &["sh", "-c", "cat a; ls target"]);
+    assert!(!out.status.success());
+    assert_eq!(stdout(&out), "a\n");
+    assert!(!world.dir.join("project.1/target").exists());
+    assert!(dir.join("target/out").exists());
+    let out = world.confine(&dir, &["--no-ignore", "--rm", "cat", "target/out"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "built\n");
+}
+
+#[test]
+fn no_ignore_cannot_be_given_with_d() {
+    let world = World::new();
+    let dir = world.dir("project");
+    assert_fails(
+        &world.confine(&dir, &["--no-ignore", "-d", ".", "true"]),
+        "--no-ignore",
+    );
+}
+
+#[test]
 fn rm_cannot_be_given_with_d() {
     let world = World::new();
     let dir = world.dir("project");
