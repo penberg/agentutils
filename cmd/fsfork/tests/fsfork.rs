@@ -2,15 +2,120 @@
 //! `fsfork.1` says it does.
 
 use std::{
-    env, fs,
-    os::unix::{
-        fs::{FileTypeExt, PermissionsExt, symlink},
-        net::UnixListener,
+    env,
+    fs::{self, File},
+    io::{Read, Write},
+    os::{
+        fd::{FromRawFd, OwnedFd},
+        unix::{
+            fs::{FileTypeExt, PermissionsExt, symlink},
+            net::UnixListener,
+        },
     },
     path::{Path, PathBuf},
-    process::{self, Command, Output},
-    thread,
+    process::{self, Command, Output, Stdio},
+    ptr, thread,
 };
+
+#[test]
+fn on_a_terminal_starts_a_shell_in_the_fork() {
+    let world = World::new();
+    let dir = world.project();
+    let fork = world.path("project.1");
+    let pwd = world.path("pwd");
+
+    let typed = format!("pwd -P > {}; exit 7\n", pwd.display());
+    let on = Terminal {
+        stdin: true,
+        stdout: true,
+    };
+    let (out, screen) = fsfork_on_terminal(&dir, &[], on, "/bin/sh", &typed);
+
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    assert_eq!(read(&world.dir, "pwd"), format!("{}\n", fork.display()));
+    assert!(
+        stderr(&out).contains(&format!("forked to {},", fork.display())),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!screen.contains("project.1"), "{screen}");
+    assert_eq!(read(&fork, "a"), "one\n");
+    assert!(world.path(".project.1.base").is_dir());
+}
+
+#[test]
+fn prints_the_path_when_stdout_is_captured() {
+    let world = World::new();
+    let dir = world.project();
+    let ran = world.path("ran");
+
+    let typed = format!("touch {}\nexit\n", ran.display());
+    let on = Terminal {
+        stdin: true,
+        stdout: false,
+    };
+    let (out, _) = fsfork_on_terminal(&dir, &[], on, "/bin/sh", &typed);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!("{}\n", world.path("project.1").display())
+    );
+    assert!(!ran.exists());
+}
+
+#[test]
+fn prints_the_path_rather_than_run_what_stdin_holds() {
+    let world = World::new();
+    let dir = world.project();
+    let ran = world.path("ran");
+
+    let typed = format!("touch {}\nexit\n", ran.display());
+    let on = Terminal {
+        stdin: false,
+        stdout: true,
+    };
+    let (out, screen) = fsfork_on_terminal(&dir, &[], on, "/bin/sh", &typed);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(screen.contains("project.1"), "{screen}");
+    assert!(!ran.exists());
+}
+
+#[test]
+fn print_prints_the_path_on_a_terminal() {
+    let world = World::new();
+    let dir = world.project();
+    let ran = world.path("ran");
+
+    let typed = format!("touch {}\nexit\n", ran.display());
+    let on = Terminal {
+        stdin: true,
+        stdout: true,
+    };
+    let (out, screen) = fsfork_on_terminal(&dir, &["--print"], on, "/bin/sh", &typed);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(screen.contains("project.1"), "{screen}");
+    assert!(world.path("project.1").is_dir());
+    assert!(!ran.exists());
+}
+
+#[test]
+fn removes_the_fork_if_the_shell_cannot_be_run() {
+    let world = World::new();
+    let dir = world.project();
+
+    let on = Terminal {
+        stdin: true,
+        stdout: true,
+    };
+    let (out, _) = fsfork_on_terminal(&dir, &[], on, "/nonexistent/shell", "");
+
+    assert_fails(&out, "/nonexistent/shell");
+    assert!(!world.path("project.1").exists());
+    assert!(!world.path(".project.1.base").exists());
+}
 
 #[test]
 fn forks_the_working_directory_next_to_it() {
@@ -382,6 +487,86 @@ fn fsfork(cwd: &Path, args: &[&str]) -> Output {
         .current_dir(cwd)
         .output()
         .unwrap()
+}
+
+/// Which of `fsfork`'s stdin and stdout are a terminal.
+#[derive(Clone, Copy)]
+struct Terminal {
+    stdin: bool,
+    stdout: bool,
+}
+
+/// Runs `fsfork` with `args` in `cwd`, with `Terminal` saying what is on a
+/// terminal, `shell` as `$SHELL`, and `typed` to read on stdin. Returns how it
+/// went, and what came out on the terminal, which has `typed` in it, echoed.
+fn fsfork_on_terminal(
+    cwd: &Path,
+    args: &[&str],
+    on: Terminal,
+    shell: &str,
+    typed: &str,
+) -> (Output, String) {
+    let (controller, tty) = pty();
+    let mut controller = File::from(controller);
+    let mut reader = controller.try_clone().unwrap();
+    let terminal = || File::from(tty.try_clone().unwrap());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fsfork"));
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env("SHELL", shell)
+        .stderr(Stdio::piped());
+    if on.stdin {
+        command.stdin(terminal());
+        controller.write_all(typed.as_bytes()).unwrap();
+    } else {
+        command.stdin(Stdio::piped());
+    }
+    if on.stdout {
+        command.stdout(terminal());
+    } else {
+        command.stdout(Stdio::piped());
+    }
+    let mut child = command.spawn().unwrap();
+    // Only the command may hold the terminal open, for reading it to end.
+    drop(command);
+    drop(tty);
+    if let Some(mut stdin) = child.stdin.take() {
+        // It may be gone already, having no use for stdin.
+        let _ = stdin.write_all(typed.as_bytes());
+    }
+    // Read as it runs, as a terminal may drop what is left when closed. It
+    // ends in an error rather than at the end of the file on Linux.
+    let screen = thread::spawn(move || {
+        let mut screen = Vec::new();
+        let _ = reader.read_to_end(&mut screen);
+        String::from_utf8_lossy(&screen).into_owned()
+    });
+    let out = child.wait_with_output().unwrap();
+    (out, screen.join().unwrap())
+}
+
+/// A new pseudo-terminal's two ends.
+fn pty() -> (OwnedFd, OwnedFd) {
+    let (mut controller, mut tty) = (-1, -1);
+    let opened = unsafe {
+        libc::openpty(
+            &mut controller,
+            &mut tty,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    assert_eq!(opened, 0, "openpty failed");
+    for fd in [controller, tty] {
+        // So that no other test's command holds the terminal open.
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+    }
+    unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(tty)) }
 }
 
 /// Runs git with `args` in `dir`, which must succeed.
