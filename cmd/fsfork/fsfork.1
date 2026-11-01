@@ -3,6 +3,7 @@
 fsfork \- fork a directory: make a copy-on-write clone of it
 .SH SYNOPSIS
 .B fsfork
+.RB [ \-\-no\-ignore ]
 .RI [ dir
 .RI [ fork ]]
 .SH DESCRIPTION
@@ -14,9 +15,17 @@ It prints the fork's path, and nothing else, so that
 .B cd $(fsfork)
 goes there.
 .PP
-The fork is everything in the directory, as it is: hidden files, the git
-repository, uncommitted changes, and build output, so builds in the fork
-start warm.
+The fork is the directory as it is, hidden files, the git repository, and
+uncommitted changes included, but for what
+.I .gitignore
+files ignore and
+.BR git (1)
+does not track: build output and dependencies, which can be many files and
+so slow to fork, and files such as
+.IR .env .
+So builds in the fork start cold, unless
+.B \-\-no\-ignore
+is given.
 Making it is quick, and it takes no space until either it or the directory
 is written to.
 From then on, the two are separate: what changes in one does not change in
@@ -57,9 +66,29 @@ removes them.
 Remove a fork's base with it, or its number stays taken.
 .PP
 .B fsfork
-knows nothing about git, or what is in the directory: it forks exactly
-.IR dir .
+goes by
+.I .gitignore
+files, the ones above
+.I dir
+in its repository too, but not
+.I .git/info/exclude
+or a global excludes file.
+In a directory that is ignored itself, it goes by the ones in the directory.
+It runs
+.BR git (1)
+without the repository's configuration, so that nothing in
+.I dir
+can make it run a command.
+If git is not there, or cannot tell what is ignored,
+.B fsfork
+says so on standard error, and forks everything.
+.PP
 In a subdirectory of a repository, it forks the subdirectory.
+.SH OPTIONS
+.TP
+.B \-\-no\-ignore
+Fork what is ignored too, so that builds in the fork start warm.
+Making it takes longer if what is ignored holds many files.
 .SH EXIT STATUS
 0 if the directory was forked, and 1 otherwise, having made neither the
 fork nor the base.
@@ -91,6 +120,12 @@ and remove one:
 .B rm \-rf turso.1 .turso.1.base
 .fi
 .RE
+.PP
+Fork the working directory with its build output, and go there:
+.PP
+.RS
+.B cd $(fsfork \-\-no\-ignore)
+.RE
 .SH CAVEATS
 On macOS, the fork is made with
 .BR clonefile (2),
@@ -102,9 +137,14 @@ files, such as Btrfs or XFS; elsewhere, it is a full copy.
 .PP
 Hard links in the directory are not hard links in the fork.
 .PP
+A directory with something ignored in it is made anew, with its permissions
+and modification time, but not its other attributes, and on macOS, sockets
+and devices beside what is ignored are left out.
+.PP
 The fork is at another path than the directory, so tools that remember
 absolute paths, such as build caches, may rebuild in it.
 .SH SEE ALSO
 .BR confine (1),
 .BR fsdiff (1),
+.BR git (1),
 .BR clonefile (2)

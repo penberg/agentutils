@@ -1,6 +1,9 @@
 //! Linux: a directory is cloned with `cp --reflink`.
 
-use std::{fs, io, path::Path, process::Command};
+use std::{ffi::OsString, fs, io, path::Path, process::Command};
+
+/// How many entries one `cp` is given, to keep within the limit on arguments.
+const ENTRIES_PER_CP: usize = 256;
 
 /// Clones the directory tree at `from` to `to`, which must not exist yet.
 /// The clone shares its blocks with the original until either is written, on
@@ -23,4 +26,23 @@ pub fn clone(from: &Path, to: &Path) -> io::Result<()> {
     };
     let _ = fs::remove_dir_all(to);
     Err(failed)
+}
+
+/// Clones `names`, entries of the directory `from`, into the directory `to`,
+/// as `clone` does.
+pub fn clone_entries(from: &Path, names: &[OsString], to: &Path) -> io::Result<()> {
+    for names in names.chunks(ENTRIES_PER_CP) {
+        let out = Command::new("cp")
+            .args(["-a", "--reflink=auto", "--target-directory"])
+            .arg(to)
+            .arg("--")
+            .args(names.iter().map(|name| from.join(name)))
+            .output()?;
+        if !out.status.success() {
+            return Err(io::Error::other(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+    }
+    Ok(())
 }

@@ -4,6 +4,7 @@
 
 #[cfg(target_os = "macos")]
 mod darwin;
+mod ignored;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -21,9 +22,20 @@ use std::{
     path::{self, Path, PathBuf},
 };
 
+use ignored::Ignored;
+
+/// What of a directory a fork of it has.
+#[derive(Clone, Copy)]
+pub enum Contents {
+    /// Everything in the directory.
+    Everything,
+    /// All but what `.gitignore` files ignore, unless it is in the index.
+    NotIgnored,
+}
+
 /// Forks `dir` to the first of `<dir>.1`, `<dir>.2`, and so on whose fork
 /// and base are both free, and returns where the fork is.
-pub fn fork(dir: &Path) -> io::Result<PathBuf> {
+pub fn fork(dir: &Path, contents: Contents) -> io::Result<PathBuf> {
     let dir = directory(dir)?;
     let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
         return Err(io::Error::other("cannot fork /"));
@@ -36,7 +48,7 @@ pub fn fork(dir: &Path) -> io::Result<PathBuf> {
             continue;
         }
         // Another fsfork may take the number first, which the clone finds.
-        match clone(&dir, &fork) {
+        match clone(&dir, &fork, contents) {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             result => return result.map(|()| fork),
         }
@@ -46,10 +58,10 @@ pub fn fork(dir: &Path) -> io::Result<PathBuf> {
 
 /// Forks `dir` to `fork`, which must not exist, and returns where the fork
 /// is, made absolute.
-pub fn fork_to(dir: &Path, fork: &Path) -> io::Result<PathBuf> {
+pub fn fork_to(dir: &Path, fork: &Path, contents: Contents) -> io::Result<PathBuf> {
     let dir = directory(dir)?;
     let fork = resolve(fork)?;
-    clone(&dir, &fork)?;
+    clone(&dir, &fork, contents)?;
     Ok(fork)
 }
 
@@ -71,7 +83,7 @@ pub fn base_of(fork: &Path) -> PathBuf {
 
 /// Forks `dir` to `fork`: clones it to the fork's base, then the base to the
 /// fork, so that the two are the same whatever changes in `dir` meanwhile.
-fn clone(dir: &Path, fork: &Path) -> io::Result<()> {
+fn clone(dir: &Path, fork: &Path, contents: Contents) -> io::Result<()> {
     if fork.starts_with(dir) {
         return Err(io::Error::other(format!(
             "{}: a fork cannot be inside the directory it is a fork of",
@@ -79,12 +91,63 @@ fn clone(dir: &Path, fork: &Path) -> io::Result<()> {
         )));
     }
     let base = base_of(fork);
-    os::clone(dir, &base).map_err(|e| at(&base, e))?;
+    match contents {
+        Contents::Everything => os::clone(dir, &base),
+        Contents::NotIgnored => clone_not_ignored(dir, &base),
+    }
+    .map_err(|e| at(&base, e))?;
     if let Err(e) = os::clone(&base, fork) {
         let _ = fs::remove_dir_all(&base);
         return Err(at(fork, e));
     }
     Ok(())
+}
+
+/// Clones `dir` to `to`, which must not exist, without what is ignored in it,
+/// or with it if that cannot be told, and leaves nothing if it fails.
+fn clone_not_ignored(dir: &Path, to: &Path) -> io::Result<()> {
+    // A fork with too much in it works, so this is no reason not to make one.
+    let ignored = match ignored::ignored(dir) {
+        Ok(ignored) => ignored,
+        Err(e) => {
+            eprintln!("fsfork: cannot tell what is ignored, so forking everything: {e}");
+            return os::clone(dir, to);
+        }
+    };
+    if ignored.paths.is_empty() {
+        return os::clone(dir, to);
+    }
+    fs::create_dir(to)?;
+    let cloned = clone_around(dir, to, &ignored);
+    if cloned.is_err() {
+        let _ = fs::remove_dir_all(to);
+    }
+    cloned
+}
+
+/// Fills `to`, a new directory, with the clone of `dir`, a directory with
+/// something ignored in it: only such directories are gone through, and
+/// everything else is cloned whole, at once.
+fn clone_around(dir: &Path, to: &Path, ignored: &Ignored) -> io::Result<()> {
+    let mut whole = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if ignored.paths.contains(&path) {
+            continue;
+        }
+        if ignored.around.contains(&path) {
+            let inside = to.join(entry.file_name());
+            fs::create_dir(&inside)?;
+            clone_around(&path, &inside, ignored)?;
+        } else {
+            whole.push(entry.file_name());
+        }
+    }
+    os::clone_entries(dir, &whole, to)?;
+    let meta = fs::symlink_metadata(dir)?;
+    fs::File::open(to)?.set_modified(meta.modified()?)?;
+    fs::set_permissions(to, meta.permissions())
 }
 
 /// `path`, canonical, if it is a directory.
