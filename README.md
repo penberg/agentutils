@@ -11,9 +11,8 @@ rather not trust with your files, work on a directory:
 
 Each does one thing. `confine` forks as `fsfork` does, and `fsdiff` knows
 where a fork's base is; otherwise none knows about the others. They keep no
-state:
-a fork is a directory, its path is its name, and `ls`, `rm` and `git` do
-the rest.
+state: a fork is a directory, its path is its name, and `ls`, `rm` and
+`git` do the rest.
 
 ![fsfork forks a repository, rm -rf * in confine empties the fork, and
 fsdiff shows the deletions, while the repository keeps its
@@ -44,7 +43,8 @@ rm -rf ../turso.1 ../.turso.1.base
 ```
 
 Meanwhile, you can keep working in `~/src/turso`, and run more forks side by
-side: `turso.2`, `turso.3`, and so on. `ls -d ../turso.*` lists them.
+side: `turso.2`, `turso.3`, and so on, or named ones, `turso.swebench` with
+`-n swebench`. `ls -d ../turso.*` lists them.
 
 Each command has a man page: [`fsfork.1`](cmd/fsfork/fsfork.1),
 [`confine.1`](cmd/confine/confine.1), and [`fsdiff.1`](cmd/fsdiff/fsdiff.1)
@@ -78,7 +78,8 @@ They run on macOS and Linux.
 and to its base, `.turso.1.base`, which keeps what the directory was when it
 was forked. The fork is cloned from the base, so that the two are the same
 whatever changes in the directory meanwhile. With no arguments, it forks the
-working directory; given one, that directory; given two, to the second.
+working directory; given one, that directory; given two, to the second. With
+`-n name`, the fork is `turso.name`, and takes no number.
 
 A fork is the directory as it is, the repository and uncommitted changes
 included, but for what `.gitignore` files ignore and git does not track, such

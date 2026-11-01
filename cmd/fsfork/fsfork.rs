@@ -3,6 +3,7 @@
 //! was forked, for `fsdiff` to compare the fork with.
 
 use std::{
+    ffi::OsStr,
     io::{self, Write},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
@@ -18,6 +19,11 @@ struct Args {
     /// fork what .gitignore files ignore too, which is otherwise left out
     #[argh(switch)]
     no_ignore: bool,
+
+    /// name the fork <dir>.<name>, next to the directory, rather than after
+    /// the first number not taken
+    #[argh(option, short = 'n', arg_name = "name")]
+    name: Option<String>,
 
     /// the directory to fork, the working directory if none; then where to
     /// put the fork, which must not exist, or next to the directory, named
@@ -52,10 +58,15 @@ fn fsfork(args: Args) -> io::Result<PathBuf> {
     } else {
         Contents::NotIgnored
     };
-    match &args.paths[..] {
-        [] => fsfork::fork(Path::new("."), contents),
-        [dir] => fsfork::fork(dir, contents),
-        [dir, fork] => fsfork::fork_to(dir, fork, contents),
+    match (&args.name, &args.paths[..]) {
+        (None, []) => fsfork::fork(Path::new("."), contents),
+        (None, [dir]) => fsfork::fork(dir, contents),
+        (None, [dir, fork]) => fsfork::fork_to(dir, fork, contents),
+        (Some(name), []) => fsfork::fork_named(Path::new("."), OsStr::new(name), contents),
+        (Some(name), [dir]) => fsfork::fork_named(dir, OsStr::new(name), contents),
+        (Some(_), [_, _]) => Err(io::Error::other(
+            "--name names the fork next to the directory, and a second argument says where to put it; give one or the other",
+        )),
         _ => Err(io::Error::other(
             "too many arguments: a directory, and a fork",
         )),

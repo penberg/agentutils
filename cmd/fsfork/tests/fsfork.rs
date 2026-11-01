@@ -73,6 +73,47 @@ fn forks_to_the_path_given() {
 }
 
 #[test]
+fn names_the_fork_after_the_directory_and_the_name_given() {
+    let world = World::new();
+    let dir = world.project();
+    let out = fsfork(&dir, &["--name", "swebench"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let fork = world.path("project.swebench");
+    assert_eq!(stdout(&out), format!("{}\n", fork.display()));
+    assert_eq!(read(&fork, "a"), "one\n");
+    assert_eq!(read(&world.path(".project.swebench.base"), "a"), "one\n");
+    let out = fsfork(&world.dir, &["-n", "lexer", "project"]);
+    assert_eq!(
+        stdout(&out),
+        format!("{}\n", world.path("project.lexer").display())
+    );
+    // A named fork takes no number.
+    let out = fsfork(&dir, &[]);
+    assert_eq!(
+        stdout(&out),
+        format!("{}\n", world.path("project.1").display())
+    );
+}
+
+#[test]
+fn fails_if_the_name_is_taken_or_is_no_name() {
+    let world = World::new();
+    let dir = world.project();
+    write(&world.path("project.swebench"), "mine", "mine\n");
+    assert_fails(&fsfork(&dir, &["--name", "swebench"]), "exists");
+    assert_eq!(read(&world.path("project.swebench"), "mine"), "mine\n");
+    assert!(!world.path(".project.swebench.base").exists());
+    assert_fails(&fsfork(&dir, &["--name", ""]), "empty");
+    assert_fails(&fsfork(&dir, &["--name", "a/b"]), "/");
+    assert_fails(
+        &fsfork(&world.dir, &["--name", "x", "project", "parser"]),
+        "--name",
+    );
+    assert!(!world.path("parser").exists());
+    assert!(!world.path("project.x").exists());
+}
+
+#[test]
 fn copies_everything_in_the_directory_as_it_is_with_no_ignore() {
     let world = World::new();
     let dir = world.project();

@@ -127,6 +127,36 @@ fn leaves_what_is_ignored_out_of_the_fork() {
 }
 
 #[test]
+fn names_the_fork_with_name() {
+    need_sandbox!();
+    let world = World::new();
+    let dir = world.dir("project");
+    write(&dir, "a", "a\n");
+    let out = world.confine(&dir, &["--name", "swebench", "sh", "-c", "pwd && cat a"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let fork = world.dir.join("project.swebench");
+    assert_eq!(stdout(&out), format!("{}\na\n", fork.display()));
+    assert!(world.dir.join(".project.swebench.base").is_dir());
+    let out = world.confine(&dir, &["-n", "swebench", "true"]);
+    assert_fails(&out, "exists");
+    let out = world.confine(&dir, &["-n", "other", "--rm", "true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!world.dir.join("project.other").exists());
+    assert!(!world.dir.join(".project.other.base").exists());
+}
+
+#[test]
+fn name_cannot_be_given_with_d() {
+    let world = World::new();
+    let dir = world.dir("project");
+    assert_fails(
+        &world.confine(&dir, &["--name", "x", "-d", ".", "true"]),
+        "--name",
+    );
+    assert_no_forks(&world);
+}
+
+#[test]
 fn no_ignore_cannot_be_given_with_d() {
     let world = World::new();
     let dir = world.dir("project");

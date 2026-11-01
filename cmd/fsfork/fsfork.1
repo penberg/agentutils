@@ -1,9 +1,11 @@
-.TH FSFORK 1 2026-10-28 "agentutils 0.1.0" "User Commands"
+.TH FSFORK 1 2026-11-01 "agentutils 0.1.0" "User Commands"
 .SH NAME
 fsfork \- fork a directory: make a copy-on-write clone of it
 .SH SYNOPSIS
 .B fsfork
 .RB [ \-\-no\-ignore ]
+.RB [ \-n
+.IR name ]
 .RI [ dir
 .RI [ fork ]]
 .SH DESCRIPTION
@@ -43,6 +45,15 @@ makes
 then
 .IR ~/src/turso.2 ,
 and so on.
+With
+.BR \-n ,
+it is named after the directory and
+.I name
+instead:
+.B fsfork \-n swebench
+makes
+.IR ~/src/turso.swebench ,
+which must not exist, and takes no number.
 .PP
 .B fsfork
 also makes the fork's base: another clone of the directory, next to the
@@ -86,6 +97,14 @@ says so on standard error, and forks everything.
 In a subdirectory of a repository, it forks the subdirectory.
 .SH OPTIONS
 .TP
+.BI \-n " name" "\fR, \fP\-\-name " name
+Name the fork
+.IR <dir>.<name> ,
+next to the directory, rather than after the first number not taken.
+It cannot be given with
+.IR fork ,
+which says where the fork goes.
+.TP
 .B \-\-no\-ignore
 Fork what is ignored too, so that builds in the fork start warm.
 Making it takes longer if what is ignored holds many files.
@@ -108,6 +127,16 @@ with its base in
 .PP
 .RS
 .B fsfork turso parser
+.RE
+.PP
+Fork
+.I turso
+to
+.IR turso.swebench ,
+and run something there:
+.PP
+.RS
+.B cd $(fsfork \-n swebench turso)
 .RE
 .PP
 List the forks of
