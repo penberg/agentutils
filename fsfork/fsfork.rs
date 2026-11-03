@@ -17,8 +17,9 @@ use linux as os;
 compile_error!("fsfork runs only on macOS and Linux for now");
 
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs, io,
+    os::unix::ffi::OsStrExt,
     path::{self, Path, PathBuf},
 };
 
@@ -37,13 +38,8 @@ pub enum Contents {
 /// and base are both free, and returns where the fork is.
 pub fn fork(dir: &Path, contents: Contents) -> io::Result<PathBuf> {
     let dir = directory(dir)?;
-    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
-        return Err(io::Error::other("cannot fork /"));
-    };
     for n in 1u64.. {
-        let mut file_name = OsString::from(name);
-        file_name.push(format!(".{n}"));
-        let fork = parent.join(file_name);
+        let fork = next_to(&dir, OsStr::new(&n.to_string()))?;
         if fork.symlink_metadata().is_ok() {
             continue;
         }
@@ -54,6 +50,24 @@ pub fn fork(dir: &Path, contents: Contents) -> io::Result<PathBuf> {
         }
     }
     unreachable!()
+}
+
+/// Forks `dir` to `<dir>.<name>` next to it, which must not exist, and
+/// returns where the fork is.
+pub fn fork_named(dir: &Path, name: &OsStr, contents: Contents) -> io::Result<PathBuf> {
+    if name.is_empty() {
+        return Err(io::Error::other("a fork's name cannot be empty"));
+    }
+    if name.as_bytes().contains(&b'/') {
+        return Err(io::Error::other(format!(
+            "{}: a fork's name cannot have / in it",
+            name.to_string_lossy()
+        )));
+    }
+    let dir = directory(dir)?;
+    let fork = next_to(&dir, name)?;
+    clone(&dir, &fork, contents)?;
+    Ok(fork)
 }
 
 /// Forks `dir` to `fork`, which must not exist, and returns where the fork
@@ -79,6 +93,17 @@ pub fn base_of(fork: &Path) -> PathBuf {
     name.push(fork.file_name().unwrap_or_default());
     name.push(".base");
     fork.with_file_name(name)
+}
+
+/// `<dir>.<suffix>`, next to `dir`.
+fn next_to(dir: &Path, suffix: &OsStr) -> io::Result<PathBuf> {
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return Err(io::Error::other("cannot fork /"));
+    };
+    let mut file_name = OsString::from(name);
+    file_name.push(".");
+    file_name.push(suffix);
+    Ok(parent.join(file_name))
 }
 
 /// Forks `dir` to `fork`: clones it to the fork's base, then the base to the

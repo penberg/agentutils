@@ -17,7 +17,9 @@ use linux as os;
 compile_error!("confine runs only on macOS and Linux for now");
 
 use std::{
-    env, io,
+    env,
+    ffi::OsStr,
+    io,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{ExitCode, ExitStatus},
@@ -77,6 +79,11 @@ struct Args {
     #[argh(option, short = 'd')]
     dir: Option<PathBuf>,
 
+    /// name the fork <dir>.<name> rather than after the first number not
+    /// taken
+    #[argh(option, short = 'n', arg_name = "name")]
+    name: Option<String>,
+
     /// remove the fork when the command exits
     #[argh(switch)]
     rm: bool,
@@ -108,6 +115,10 @@ fn main() -> ExitCode {
         eprintln!(
             "confine: --no-ignore is about what is in a fork, and -d runs the command without one"
         );
+        return ExitCode::FAILURE;
+    }
+    if args.name.is_some() && args.dir.is_some() {
+        eprintln!("confine: --name names a fork, and -d runs the command without one");
         return ExitCode::FAILURE;
     }
     let e = match confine(&args) {
@@ -171,7 +182,10 @@ fn confine(args: &Args) -> io::Result<Ran> {
     } else {
         Contents::NotIgnored
     };
-    let fork = fsfork::fork(Path::new("."), contents)?;
+    let fork = match &args.name {
+        Some(name) => fsfork::fork_named(Path::new("."), OsStr::new(name), contents)?,
+        None => fsfork::fork(Path::new("."), contents)?,
+    };
     eprintln!("confine: forked to {}", fork.display());
     let ran = run(&command, &fork, &writable, &readable, &hidden, args.rm);
     if (args.rm || !matches!(ran, Ok(Ran::Exited(_))))

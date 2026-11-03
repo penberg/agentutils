@@ -1,4 +1,4 @@
-.TH CONFINE 1 2026-10-28 "agentutils 0.1.0" "User Commands"
+.TH CONFINE 1 2026-11-01 "agentutils 0.1.0" "User Commands"
 .SH NAME
 confine \- run a command that may write only to a fork of a directory
 .SH SYNOPSIS
@@ -7,6 +7,8 @@ confine \- run a command that may write only to a fork of a directory
 .IR path ]...
 .RB [ \-r
 .IR path ]...
+.RB [ \-n
+.IR name ]
 .RB [ \-\-no\-ignore ]
 .RB [ \-\-rm | \-d
 .IR dir ]
@@ -20,6 +22,9 @@ does, next to it, named after it and the first number not taken
 .RB ( turso.1
 for
 .BR turso ),
+or after it and the name given with
+.B \-n
+.RB ( turso.swebench ),
 and runs
 .I command
 in the fork, or your shell
@@ -68,6 +73,17 @@ Run the command in
 .I dir
 itself, and let it write there, rather than in a fork of the working
 directory.
+.TP
+.BI \-n " name" "\fR, \fP\-\-name " name
+Name the fork
+.IR <dir>.<name> ,
+as
+.B fsfork \-n
+does, rather than after the first number not taken.
+It must not exist.
+It cannot be given with
+.BR \-d ,
+as there is no fork.
 .TP
 .B \-\-rm
 Remove the fork, and its base, when the command exits, as if it had never
