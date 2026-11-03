@@ -20,13 +20,19 @@ use std::{
     env,
     ffi::OsStr,
     io,
-    os::unix::process::{CommandExt, ExitStatusExt},
+    os::unix::{
+        fs::PermissionsExt,
+        process::{CommandExt, ExitStatusExt},
+    },
     path::{Path, PathBuf},
     process::{ExitCode, ExitStatus},
 };
 
 use argh::FromArgs;
-use fsfork::Contents;
+use fsfork::{Contents, at, message};
+
+/// How to give the arguments, as in the man page.
+const USAGE: &str = "confine [-w path]... [-r path]... [-n name] [--no-ignore] [--rm | -d dir] [command [argument ...]]";
 
 /// Directories under the home directory that the command may write to, so
 /// that builds and package managers keep working.
@@ -106,32 +112,36 @@ enum Ran {
 }
 
 fn main() -> ExitCode {
-    let args: Args = argh::from_env();
-    if args.rm && args.dir.is_some() {
-        eprintln!("confine: --rm removes a fork, and -d runs the command without one");
-        return ExitCode::FAILURE;
-    }
-    if args.no_ignore && args.dir.is_some() {
-        eprintln!(
-            "confine: --no-ignore is about what is in a fork, and -d runs the command without one"
-        );
-        return ExitCode::FAILURE;
-    }
-    if args.name.is_some() && args.dir.is_some() {
-        eprintln!("confine: --name names a fork, and -d runs the command without one");
-        return ExitCode::FAILURE;
+    let args: Args = match message::parse(USAGE, 1) {
+        Ok(args) => args,
+        Err(code) => return code,
+    };
+    if args.dir.is_some() {
+        let conflict = if args.rm {
+            Some("--rm")
+        } else if args.no_ignore {
+            Some("--no-ignore")
+        } else if args.name.is_some() {
+            Some("-n")
+        } else {
+            None
+        };
+        if let Some(option) = conflict {
+            let problem = format!("{option} cannot be given with -d, which makes no fork");
+            return message::usage_error(&problem, USAGE, 1);
+        }
     }
     let e = match confine(&args) {
         Ok(Ran::Exited(status)) => return exit_as(status),
         Ok(Ran::Failed(e)) => e,
         Err(e) => {
-            eprintln!("confine: {e}");
+            message::say(message::describe(&e));
             return ExitCode::FAILURE;
         }
     };
     // As env(1) does: 127 if the command was not found, 126 if it could not
     // be run.
-    eprintln!("confine: {}: {e}", args.command.first().map_or("", |c| c));
+    message::say(message::describe(&e));
     if e.kind() == io::ErrorKind::NotFound {
         ExitCode::from(127)
     } else {
@@ -167,13 +177,15 @@ fn confine(args: &Args) -> io::Result<Ran> {
     } else {
         args.command.clone()
     };
+    // Before forking, so that a command that is not there makes no fork.
+    if let Err(e) = find_in_path(&command[0]) {
+        return Ok(Ran::Failed(e));
+    }
     if let Some(dir) = &args.dir {
+        let typed = dir;
         let dir = dir.canonicalize().map_err(|e| at(dir, e))?;
         if !dir.is_dir() {
-            return Err(io::Error::other(format!(
-                "{}: not a directory",
-                dir.display()
-            )));
+            return Err(at(typed, io::Error::from_raw_os_error(libc::ENOTDIR)));
         }
         return run(&command, &dir, &writable, &readable, &hidden, false);
     }
@@ -191,7 +203,7 @@ fn confine(args: &Args) -> io::Result<Ran> {
     if (args.rm || !matches!(ran, Ok(Ran::Exited(_))))
         && let Err(e) = fsfork::remove(&fork)
     {
-        eprintln!("confine: {e}");
+        message::say(message::describe(&e));
     }
     ran
 }
@@ -206,12 +218,17 @@ fn run(
     hidden: &[PathBuf],
     wait: bool,
 ) -> io::Result<Ran> {
+    // So that it is said to be not found by `confine`, rather than by the
+    // sandbox, which is what is run.
+    if let Err(e) = find_in(&command[0], dir) {
+        return Ok(Ran::Failed(e));
+    }
     let mut confined = os::confine(command, dir, writable, readable, hidden)?;
     // Claude Code would otherwise ask whether to trust every new directory,
     // and accepting would write to `~/.claude.json`, which it may not.
     confined.current_dir(dir).env("CLAUDE_CODE_SANDBOXED", "1");
     if !wait {
-        return Ok(Ran::Failed(confined.exec()));
+        return Ok(Ran::Failed(at(Path::new(&command[0]), confined.exec())));
     }
     for signal in SIGNALS {
         unsafe { libc::signal(signal, libc::SIG_IGN) };
@@ -227,7 +244,7 @@ fn run(
     }
     Ok(match confined.status() {
         Ok(status) => Ran::Exited(status),
-        Err(e) => Ran::Failed(e),
+        Err(e) => Ran::Failed(at(Path::new(&command[0]), e)),
     })
 }
 
@@ -244,7 +261,38 @@ fn exit_as(status: ExitStatus) -> ExitCode {
     ExitCode::from(status.code().unwrap_or(1) as u8)
 }
 
-/// `e`, saying it is about `path`.
-fn at(path: &Path, e: io::Error) -> io::Error {
-    io::Error::new(e.kind(), format!("{}: {e}", path.display()))
+/// Finds `command`, if it has no `/` in it, in `$PATH`, as a shell would.
+fn find_in_path(command: &str) -> io::Result<()> {
+    if command.contains('/') {
+        return Ok(());
+    }
+    let path = env::var_os("PATH").unwrap_or_default();
+    let dirs: Vec<PathBuf> = env::split_paths(&path).collect();
+    // A relative directory is in the one the command runs in, not this one.
+    let found = dirs.iter().any(|dir| {
+        dir.is_relative()
+            || dir
+                .join(command)
+                .metadata()
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    });
+    if found {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{command}: command not found"),
+        ))
+    }
+}
+
+/// Finds `command`, if it has a `/` in it, from `dir`, where it runs.
+fn find_in(command: &str, dir: &Path) -> io::Result<()> {
+    if !command.contains('/') {
+        return Ok(());
+    }
+    dir.join(command)
+        .metadata()
+        .map(|_| ())
+        .map_err(|e| at(Path::new(command), e))
 }

@@ -4,12 +4,16 @@
 mod git;
 
 use std::{
-    env, io,
+    io,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use argh::FromArgs;
+use fsfork::{at, message};
+
+/// How to give the arguments, as in the man page, a line for each form.
+const USAGE: &str = "fsdiff [--stat] [fork]\nfsdiff [--stat] old new";
 
 /// Show what changed in a fork since it was made, or between two
 /// directories, as a patch.
@@ -30,7 +34,7 @@ struct Args {
 const TROUBLE: u8 = 2;
 
 fn main() -> ExitCode {
-    let args = match parse() {
+    let args: Args = match message::parse(USAGE, TROUBLE) {
         Ok(args) => args,
         Err(code) => return code,
     };
@@ -42,72 +46,58 @@ fn main() -> ExitCode {
     match fsdiff(&args) {
         Ok(false) => ExitCode::SUCCESS,
         Ok(true) => ExitCode::from(1),
-        Err(e) => {
-            eprintln!("fsdiff: {e}");
+        Err(Wrong::Usage(problem)) => message::usage_error(problem, USAGE, TROUBLE),
+        Err(Wrong::Failed(e)) => {
+            message::say(message::describe(&e));
             ExitCode::from(TROUBLE)
         }
     }
 }
 
-/// The arguments `fsdiff` was given, or the code to exit with if they were
-/// not right, or asked for help.
-fn parse() -> Result<Args, ExitCode> {
-    let strings: Vec<String> = env::args().collect();
-    let command = Path::new(&strings[0])
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("fsdiff");
-    let strs: Vec<&str> = strings[1..].iter().map(String::as_str).collect();
-    Args::from_args(&[command], &strs).map_err(|exit| match exit.status {
-        Ok(()) => {
-            print!("{}", exit.output);
-            ExitCode::SUCCESS
-        }
-        Err(()) => {
-            eprint!("{}", exit.output);
-            ExitCode::from(TROUBLE)
-        }
-    })
+/// Why there is no difference to show.
+enum Wrong {
+    /// The arguments were not right, for this reason.
+    Usage(&'static str),
+    /// Showing it failed.
+    Failed(io::Error),
+}
+
+impl From<io::Error> for Wrong {
+    fn from(e: io::Error) -> Self {
+        Wrong::Failed(e)
+    }
 }
 
 /// Shows the difference `args` ask for, and returns whether there is one.
-fn fsdiff(args: &Args) -> io::Result<bool> {
+fn fsdiff(args: &Args) -> Result<bool, Wrong> {
     let (old, new) = match &args.paths[..] {
         [old, new] => (directory(old)?, directory(new)?),
         [] | [_] => {
             let fork = args.paths.first().map_or(Path::new("."), PathBuf::as_path);
+            let typed = fork;
             let fork = directory(fork)?;
             let base = fsfork::base_of(&fork);
             if !base.is_dir() {
-                return Err(io::Error::other(format!(
-                    "{}: no base at {}; is it a fork?",
-                    fork.display(),
-                    base.display()
-                )));
+                let name = base.file_name().unwrap_or_default().to_string_lossy();
+                return Err(Wrong::Failed(io::Error::other(format!(
+                    "{}: not a fork: no {name} next to it",
+                    typed.display()
+                ))));
             }
             (base, fork)
         }
-        _ => {
-            return Err(io::Error::other(
-                "too many arguments: a fork, or two directories",
-            ));
-        }
+        _ => return Err(Wrong::Usage("too many arguments")),
     };
     let repo = git::Repo::new()?;
     let (before, after) = repo.record(&old, &new)?;
-    repo.diff(&before, &after, args.stat)
+    Ok(repo.diff(&before, &after, args.stat)?)
 }
 
 /// `path`, canonical, if it is a directory.
 fn directory(path: &Path) -> io::Result<PathBuf> {
-    let dir = path
-        .canonicalize()
-        .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
+    let dir = path.canonicalize().map_err(|e| at(path, e))?;
     if !dir.is_dir() {
-        return Err(io::Error::other(format!(
-            "{}: not a directory",
-            dir.display()
-        )));
+        return Err(at(path, io::Error::from_raw_os_error(libc::ENOTDIR)));
     }
     Ok(dir)
 }

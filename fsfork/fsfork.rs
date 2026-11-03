@@ -7,6 +7,7 @@ mod darwin;
 mod ignored;
 #[cfg(target_os = "linux")]
 mod linux;
+pub mod message;
 
 #[cfg(target_os = "macos")]
 use darwin as os;
@@ -24,6 +25,8 @@ use std::{
 };
 
 use ignored::Ignored;
+pub use message::at;
+use message::shown;
 
 /// What of a directory a fork of it has.
 #[derive(Clone, Copy)]
@@ -111,16 +114,30 @@ fn next_to(dir: &Path, suffix: &OsStr) -> io::Result<PathBuf> {
 fn clone(dir: &Path, fork: &Path, contents: Contents) -> io::Result<()> {
     if fork.starts_with(dir) {
         return Err(io::Error::other(format!(
-            "{}: a fork cannot be inside the directory it is a fork of",
-            fork.display()
+            "{}: cannot be inside the directory it forks",
+            shown(fork).display()
         )));
+    }
+    if fork.symlink_metadata().is_ok() {
+        return Err(at(fork, io::Error::from_raw_os_error(libc::EEXIST)));
     }
     let base = base_of(fork);
     match contents {
         Contents::Everything => os::clone(dir, &base),
         Contents::NotIgnored => clone_not_ignored(dir, &base),
     }
-    .map_err(|e| at(&base, e))?;
+    .map_err(|e| match e.kind() {
+        // A fork removed without its base.
+        io::ErrorKind::AlreadyExists => io::Error::new(
+            e.kind(),
+            format!(
+                "{}: its base {} is left over; remove it",
+                shown(fork).display(),
+                shown(&base).display()
+            ),
+        ),
+        _ => at(&base, e),
+    })?;
     if let Err(e) = os::clone(&base, fork) {
         let _ = fs::remove_dir_all(&base);
         return Err(at(fork, e));
@@ -135,7 +152,10 @@ fn clone_not_ignored(dir: &Path, to: &Path) -> io::Result<()> {
     let ignored = match ignored::ignored(dir) {
         Ok(ignored) => ignored,
         Err(e) => {
-            eprintln!("fsfork: cannot tell what is ignored, so forking everything: {e}");
+            message::say(format!(
+                "forking everything, as git cannot tell what is ignored: {}",
+                message::describe(&e)
+            ));
             return os::clone(dir, to);
         }
     };
@@ -179,10 +199,7 @@ fn clone_around(dir: &Path, to: &Path, ignored: &Ignored) -> io::Result<()> {
 fn directory(path: &Path) -> io::Result<PathBuf> {
     let dir = path.canonicalize().map_err(|e| at(path, e))?;
     if !dir.is_dir() {
-        return Err(io::Error::other(format!(
-            "{}: not a directory",
-            dir.display()
-        )));
+        return Err(at(path, io::Error::from_raw_os_error(libc::ENOTDIR)));
     }
     Ok(dir)
 }
@@ -194,15 +211,10 @@ fn resolve(path: &Path) -> io::Result<PathBuf> {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(io::Error::other(format!(
             "{}: not a place for a fork",
-            path.display()
+            shown(&path).display()
         )));
     };
     Ok(parent.canonicalize().map_err(|e| at(parent, e))?.join(name))
-}
-
-/// `e`, saying it is about `path`.
-fn at(path: &Path, e: io::Error) -> io::Error {
-    io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
 
 #[cfg(test)]

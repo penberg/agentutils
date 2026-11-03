@@ -17,6 +17,8 @@ use std::{
     process::{self, Command},
 };
 
+use crate::message::describe;
+
 /// The paths in a directory that are ignored, and the directories that have
 /// some in them.
 pub struct Ignored {
@@ -123,14 +125,11 @@ impl Repo {
             .arg(dir)
             .current_dir(root)
             .output()
-            .map_err(|e| io::Error::other(format!("cannot run git: {e}")))?;
+            .map_err(|e| io::Error::other(format!("git: {}", describe(&e))))?;
         match checked.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => Err(io::Error::other(format!(
-                "git: {}",
-                String::from_utf8_lossy(&checked.stderr).trim()
-            ))),
+            _ => Err(failed(&checked.stderr)),
         }
     }
 }
@@ -159,14 +158,19 @@ fn git() -> Command {
 fn run(command: &mut Command) -> io::Result<Vec<u8>> {
     let out = command
         .output()
-        .map_err(|e| io::Error::other(format!("cannot run git: {e}")))?;
+        .map_err(|e| io::Error::other(format!("git: {}", describe(&e))))?;
     if !out.status.success() {
-        return Err(io::Error::other(format!(
-            "git: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
+        return Err(failed(&out.stderr));
     }
     Ok(out.stdout)
+}
+
+/// Git having failed, saying why in `stderr`, of which the first line says
+/// enough.
+fn failed(stderr: &[u8]) -> io::Error {
+    let stderr = String::from_utf8_lossy(stderr);
+    let why = stderr.lines().next().unwrap_or("failed").trim();
+    io::Error::other(format!("git: {why}"))
 }
 
 #[cfg(test)]

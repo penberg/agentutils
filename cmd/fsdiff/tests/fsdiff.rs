@@ -69,7 +69,10 @@ fn exits_with_2_for_a_directory_that_is_not_a_fork() {
     let dir = world.project();
     let out = world.fsdiff(&dir, &[]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(stderr(&out).contains("is it a fork?"), "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out),
+        "fsdiff: .: not a fork: no .project.base next to it\n"
+    );
     let out = world.fsdiff(&dir, &["missing"]);
     assert_eq!(out.status.code(), Some(2));
     let out = world.fsdiff(&dir, &["--no-such-option"]);
@@ -317,4 +320,18 @@ fn stdout(out: &Output) -> String {
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn says_what_is_wrong_with_the_arguments_and_how_to_give_them() {
+    let world = World::new();
+    let dir = world.project();
+    let out = world.fsdiff(&dir, &["a", "b", "c"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        stderr(&out),
+        "fsdiff: too many arguments\n\
+         usage: fsdiff [--stat] [fork]\n       \
+         fsdiff [--stat] old new\n"
+    );
 }
