@@ -1,6 +1,9 @@
 //! `fsfork` forks a directory: it makes a copy-on-write clone of it, the
 //! fork, and another, the base, which keeps what the directory was when it
-//! was forked, for `fsdiff` to compare the fork with.
+//! was forked, for `fsdiff` to compare the fork with. With `-l`, it lists
+//! the forks of a directory instead.
+
+mod list;
 
 use std::{
     env,
@@ -14,13 +17,18 @@ use std::{
 use argh::FromArgs;
 use fsfork::{Contents, message};
 
-/// How to give the arguments, as in the man page.
-const USAGE: &str = "fsfork [--no-ignore] [--print] [-n name] [dir [fork]]";
+/// How to give the arguments, as in the man page, a line for each form.
+const USAGE: &str = "fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\nfsfork -l [dir]";
 
 /// Fork a directory: make a copy-on-write clone of it, and start a shell there
 /// or, if not on a terminal, print where it is.
 #[derive(FromArgs)]
 struct Args {
+    /// list the forks of the directory, with how long each has been left
+    /// alone and what changed in it, rather than fork it
+    #[argh(switch, short = 'l')]
+    list: bool,
+
     /// print where the fork is, rather than start a shell there
     #[argh(switch)]
     print: bool,
@@ -46,6 +54,9 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(code) => return code,
     };
+    if args.list {
+        return list(args);
+    }
     // A shell needs both: with stdout captured, as in `cd $(fsfork)`, the
     // path is wanted, and with stdin not a terminal, a shell would run what
     // it reads from there as commands.
@@ -65,6 +76,33 @@ fn main() -> ExitCode {
     };
     match done {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            message::say(message::describe(&e));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Lists the forks of the directory `args` give.
+fn list(args: Args) -> ExitCode {
+    let conflict = if args.print {
+        Some("-l cannot be given with --print")
+    } else if args.no_ignore {
+        Some("-l cannot be given with --no-ignore")
+    } else if args.name.is_some() {
+        Some("-l cannot be given with -n")
+    } else if args.paths.len() > 1 {
+        Some("too many arguments")
+    } else {
+        None
+    };
+    if let Some(problem) = conflict {
+        return message::usage_error(problem, USAGE, 1);
+    }
+    let dir = args.paths.first().map_or(Path::new("."), PathBuf::as_path);
+    match list::list(dir) {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
         Err(e) => {
             message::say(message::describe(&e));
             ExitCode::FAILURE

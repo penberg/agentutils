@@ -21,8 +21,9 @@ compile_error!("fsfork runs only on macOS and Linux for now");
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
-    os::unix::ffi::OsStrExt,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{self, Path, PathBuf},
+    time::{Duration, SystemTime},
 };
 
 use ignored::Ignored;
@@ -89,6 +90,69 @@ pub fn remove(fork: &Path) -> io::Result<()> {
     let removed = fs::remove_dir_all(fork).map_err(|e| at(fork, e));
     let base_removed = fs::remove_dir_all(&base).map_err(|e| at(&base, e));
     removed.and(base_removed)
+}
+
+/// A fork of a directory, next to it, or what is left of one.
+pub struct Found {
+    /// Where the fork is, or was.
+    pub fork: PathBuf,
+    /// Where its base is.
+    pub base: PathBuf,
+    /// Whether only the base is left, the fork having been removed without
+    /// it.
+    pub left_over: bool,
+    /// When it was made, roughly: when its base last changed.
+    pub made: SystemTime,
+}
+
+/// The forks of `dir` next to it, `<dir>.<suffix>` with a base, and the bases
+/// left over from forks removed without them, oldest first. Forks made
+/// elsewhere, with a path given, are not found.
+///
+/// When each was made is when its base last changed, which it never does once
+/// made, but for attributes the system may add to it later.
+pub fn forks(dir: &Path) -> io::Result<Vec<Found>> {
+    let dir = directory(dir)?;
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return Ok(Vec::new());
+    };
+    let mut prefix = name.as_bytes().to_vec();
+    prefix.push(b'.');
+    let mut found = Vec::new();
+    for entry in fs::read_dir(parent).map_err(|e| at(parent, e))? {
+        let entry = entry.map_err(|e| at(parent, e))?;
+        let entry_name = entry.file_name();
+        let entry_name = entry_name.as_bytes();
+        // A fork is found by its base, `.<dir>.<suffix>.base`, which every
+        // fork has, and a directory merely named like one does not.
+        let Some(fork_name) = entry_name
+            .strip_prefix(b".")
+            .and_then(|name| name.strip_suffix(b".base"))
+            .filter(|name| name.len() > prefix.len() && name.starts_with(&prefix))
+        else {
+            continue;
+        };
+        let base = entry.path();
+        let meta = base.symlink_metadata().map_err(|e| at(&base, e))?;
+        if !meta.is_dir() {
+            continue;
+        }
+        let fork = parent.join(OsStr::from_bytes(fork_name));
+        let fork_is_dir = fork.symlink_metadata().is_ok_and(|m| m.is_dir());
+        let made = SystemTime::UNIX_EPOCH
+            + Duration::new(
+                u64::try_from(meta.ctime()).unwrap_or(0),
+                u32::try_from(meta.ctime_nsec()).unwrap_or(0),
+            );
+        found.push(Found {
+            left_over: !fork_is_dir,
+            fork,
+            base,
+            made,
+        });
+    }
+    found.sort_by(|a, b| a.made.cmp(&b.made).then_with(|| a.fork.cmp(&b.fork)));
+    Ok(found)
 }
 
 /// The base of `fork`: `.<name>.base` next to it.

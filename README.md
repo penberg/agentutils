@@ -44,7 +44,16 @@ rm -rf ../turso.1 ../.turso.1.base
 
 Meanwhile, you can keep working in `~/src/turso`, and run more forks side by
 side: `turso.2`, `turso.3`, and so on, or named ones, `turso.swebench` with
-`-n swebench`. `ls -d ../turso.*` lists them.
+`-n swebench`. `fsfork -l` lists them, with what is in each, so that you can
+tell which to remove:
+
+```
+$ fsfork -l
+../turso.1         4 days ago     unchanged
+../turso.3         1 day ago      15 files changed, 6 applied
+../.turso.2.base   2 hours ago    base left over, with no fork
+../turso.swebench  9 minutes ago  applied
+```
 
 Each command has a man page: [`fsfork.1`](cmd/fsfork/fsfork.1),
 [`confine.1`](cmd/confine/confine.1), and [`fsdiff.1`](cmd/fsdiff/fsdiff.1)

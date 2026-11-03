@@ -8,8 +8,10 @@
 //! configuration but its defaults.
 
 use std::{
-    env, fs, io,
-    os::unix::process::CommandExt,
+    env,
+    ffi::OsStr,
+    fs, io,
+    os::unix::{ffi::OsStrExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
 };
@@ -98,6 +100,26 @@ impl Repo {
             Some(1) => Ok(true),
             _ => Err(io::Error::other("git could not compare the trees")),
         }
+    }
+
+    /// The paths that differ between the trees `before` and `after`, as in
+    /// `diff` but by git with no configuration but its defaults, a rename
+    /// being both of its paths.
+    pub fn changed(&self, before: &str, after: &str) -> io::Result<Vec<PathBuf>> {
+        let listed = self
+            .git()
+            .args(["diff", "--name-only", "--no-renames", "-z", before, after])
+            .stderr(process::Stdio::inherit())
+            .output()?;
+        if !listed.status.success() {
+            return Err(io::Error::other("git could not compare the trees"));
+        }
+        Ok(listed
+            .stdout
+            .split(|&b| b == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(OsStr::from_bytes(path)))
+            .collect())
     }
 
     /// Records the files in `tree` that git does not ignore as a tree,

@@ -9,6 +9,9 @@ fsfork \- fork a directory: make a copy-on-write clone of it
 .IR name ]
 .RI [ dir
 .RI [ fork ]]
+.br
+.B fsfork \-l
+.RI [ dir ]
 .SH DESCRIPTION
 .B fsfork
 makes a copy-on-write clone of
@@ -86,11 +89,48 @@ changes in the directory meanwhile.
 .PP
 .B fsfork
 keeps no other record of its forks: a fork is a directory, and
-.BR ls (1)
-lists them,
 .BR rm (1)
-removes them.
+removes it.
 Remove a fork's base with it, or its number stays taken.
+.PP
+With
+.BR \-l ,
+it forks nothing, and lists the forks of
+.IR dir ,
+or of the working directory, that are next to it: each
+.I <dir>.<suffix>
+with a base, and each base left over from a fork removed without it.
+A line for each gives its path, as it would be typed from the working
+directory; how long it has been left alone, since a file in it last changed,
+or since it was made, if none has; and what is in it:
+.TP
+.B unchanged
+Nothing changed in it, as
+.BR fsdiff (1)
+would say.
+.TP
+.B applied
+Something changed in it, and
+.I dir
+has every file that changed as it is in the fork: the changes were applied.
+.TP
+.IB n " files changed" "\fR, \fPm applied"
+.I n
+files changed in it, of which
+.IR dir ,
+if
+.I m
+is given, has
+.I m
+as they are in the fork.
+.TP
+.B base left over, with no fork
+The fork is gone, and its base is not.
+.PP
+Those left alone longest come first.
+Forks made elsewhere, with
+.I fork
+given, are not listed.
 .PP
 .B fsfork
 goes by
@@ -121,6 +161,11 @@ It cannot be given with
 .IR fork ,
 which says where the fork goes.
 .TP
+.BR \-l ", " \-\-list
+List the forks of the directory, rather than fork it.
+It cannot be given with the other options or with
+.IR fork .
+.TP
 .B \-\-no\-ignore
 Fork what is ignored too, so that builds in the fork start warm.
 Making it takes longer if what is ignored holds many files.
@@ -132,6 +177,9 @@ Print the fork's path, even on a terminal, rather than start a shell there.
 made neither the fork nor the base.
 On a terminal, the status of the shell, or 1, having made neither, if the shell
 cannot be run.
+With
+.BR \-l ,
+0 if every fork was listed with what is in it, and 1 otherwise.
 .SH EXAMPLES
 Fork the working directory, and work in the fork in a shell of its own:
 .PP
@@ -172,7 +220,7 @@ and remove one:
 .PP
 .RS
 .nf
-.B ls \-d turso.*
+.B fsfork \-l turso
 .B rm \-rf turso.1 .turso.1.base
 .fi
 .RE
