@@ -221,14 +221,17 @@ fn fails_if_the_name_is_taken_or_is_no_name() {
     let world = World::new();
     let dir = world.project();
     write(&world.path("project.swebench"), "mine", "mine\n");
-    assert_fails(&fsfork(&dir, &["--name", "swebench"]), "exists");
+    assert_fails(
+        &fsfork(&dir, &["--name", "swebench"]),
+        "fsfork: ../project.swebench: file exists\n",
+    );
     assert_eq!(read(&world.path("project.swebench"), "mine"), "mine\n");
     assert!(!world.path(".project.swebench.base").exists());
     assert_fails(&fsfork(&dir, &["--name", ""]), "empty");
     assert_fails(&fsfork(&dir, &["--name", "a/b"]), "/");
     assert_fails(
         &fsfork(&world.dir, &["--name", "x", "project", "parser"]),
-        "--name",
+        "fsfork: -n cannot be given with a fork\nusage: fsfork ",
     );
     assert!(!world.path("parser").exists());
     assert!(!world.path("project.x").exists());
@@ -442,10 +445,16 @@ fn fails_if_the_fork_or_its_base_exists_with_something_ignored() {
     write(&world.path("parser"), "mine", "mine\n");
     write(&world.path(".lexer.base"), "mine", "mine\n");
     let args = |fork| ["project", fork];
-    assert_fails(&fsfork(&world.dir, &args("parser")), "exists");
+    assert_fails(
+        &fsfork(&world.dir, &args("parser")),
+        "fsfork: parser: file exists\n",
+    );
     assert_eq!(read(&world.path("parser"), "mine"), "mine\n");
     assert!(!world.path(".parser.base").exists());
-    assert_fails(&fsfork(&world.dir, &args("lexer")), "exists");
+    assert_fails(
+        &fsfork(&world.dir, &args("lexer")),
+        "fsfork: lexer: its base .lexer.base is left over; remove it\n",
+    );
     assert_eq!(read(&world.path(".lexer.base"), "mine"), "mine\n");
     assert!(!world.path("lexer").exists());
 }
@@ -469,10 +478,16 @@ fn fails_if_the_fork_or_its_base_exists() {
     let world = World::new();
     world.project();
     fs::create_dir(world.path("parser")).unwrap();
-    assert_fails(&fsfork(&world.dir, &["project", "parser"]), "exists");
+    assert_fails(
+        &fsfork(&world.dir, &["project", "parser"]),
+        "fsfork: parser: file exists\n",
+    );
     assert!(!world.path(".parser.base").exists());
     fs::create_dir(world.path(".lexer.base")).unwrap();
-    assert_fails(&fsfork(&world.dir, &["project", "lexer"]), "exists");
+    assert_fails(
+        &fsfork(&world.dir, &["project", "lexer"]),
+        "fsfork: lexer: its base .lexer.base is left over; remove it\n",
+    );
     assert!(!world.path("lexer").exists());
 }
 
@@ -675,4 +690,34 @@ fn assert_fails(out: &Output, message: &str) {
         "expected {message:?} in: {}",
         stderr(out)
     );
+}
+
+#[test]
+fn says_what_is_wrong_with_the_arguments_and_how_to_give_them() {
+    let world = World::new();
+    let dir = world.project();
+    let usage = "usage: fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\n";
+    let out = fsfork(&dir, &["--bogus"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        stderr(&out),
+        format!("fsfork: unrecognized argument: --bogus\n{usage}")
+    );
+    let out = fsfork(&dir, &["-n"]);
+    assert_eq!(
+        stderr(&out),
+        format!("fsfork: no value provided for option '-n'\n{usage}")
+    );
+    let out = fsfork(&world.dir, &["a", "b", "c"]);
+    assert_eq!(stderr(&out), format!("fsfork: too many arguments\n{usage}"));
+}
+
+#[test]
+fn says_what_is_wrong_in_lowercase_with_paths_as_typed() {
+    let world = World::new();
+    world.project();
+    let out = fsfork(&world.dir, &["missing"]);
+    assert_eq!(stderr(&out), "fsfork: missing: no such file or directory\n");
+    let out = fsfork(&world.dir, &["project/a"]);
+    assert_eq!(stderr(&out), "fsfork: project/a: not a directory\n");
 }

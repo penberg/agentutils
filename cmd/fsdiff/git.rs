@@ -14,6 +14,8 @@ use std::{
     process::{self, Command, ExitStatus},
 };
 
+use fsfork::message::shown;
+
 /// The signals from the terminal, which `fsdiff` ignores and git does not.
 pub const SIGNALS: [i32; 3] = [libc::SIGINT, libc::SIGQUIT, libc::SIGHUP];
 
@@ -111,8 +113,8 @@ impl Repo {
         )?;
         if !added.success() {
             return Err(io::Error::other(format!(
-                "git could not read {}",
-                tree.display()
+                "{}: git could not read it",
+                shown(tree).display()
             )));
         }
         let written = self
@@ -122,8 +124,8 @@ impl Repo {
             .output()?;
         if !written.status.success() {
             return Err(io::Error::other(format!(
-                "git could not record {}",
-                tree.display()
+                "{}: git could not record it",
+                shown(tree).display()
             )));
         }
         Ok(String::from_utf8_lossy(&written.stdout).trim().to_string())

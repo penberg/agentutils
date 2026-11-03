@@ -151,7 +151,7 @@ fn name_cannot_be_given_with_d() {
     let dir = world.dir("project");
     assert_fails(
         &world.confine(&dir, &["--name", "x", "-d", ".", "true"]),
-        "--name",
+        "-n cannot be given with -d",
     );
     assert_no_forks(&world);
 }
@@ -503,4 +503,41 @@ fn assert_fails(out: &Output, message: &str) {
         "expected {message:?} in: {}",
         stderr(out)
     );
+}
+
+#[test]
+fn says_a_command_that_is_not_there_is_not_found_and_makes_no_fork() {
+    let world = World::new();
+    let dir = world.dir("project");
+    let out = world.confine(&dir, &["no-such-command"]);
+    assert_eq!(out.status.code(), Some(127), "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out),
+        "confine: no-such-command: command not found\n"
+    );
+    assert_no_forks(&world);
+    let out = world.confine(&dir, &["-d", ".", "./missing"]);
+    assert_eq!(out.status.code(), Some(127), "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out),
+        "confine: ./missing: no such file or directory\n"
+    );
+}
+
+#[test]
+fn says_what_is_wrong_with_the_arguments_and_how_to_give_them() {
+    let world = World::new();
+    let dir = world.dir("project");
+    let out = world.confine(&dir, &["--rm", "-d", ".", "true"]);
+    let said = stderr(&out);
+    let mut lines = said.lines();
+    assert_eq!(
+        lines.next(),
+        Some("confine: --rm cannot be given with -d, which makes no fork")
+    );
+    assert!(
+        lines.next().unwrap().starts_with("usage: confine "),
+        "{said}"
+    );
+    assert_eq!(lines.next(), None);
 }

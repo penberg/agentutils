@@ -9,4 +9,5 @@ license.workspace = true
 path = "fsfork.rs"
 
 [dependencies]
+argh.workspace = true
 libc.workspace = true

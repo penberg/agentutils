@@ -12,7 +12,10 @@ use std::{
 };
 
 use argh::FromArgs;
-use fsfork::Contents;
+use fsfork::{Contents, message};
+
+/// How to give the arguments, as in the man page.
+const USAGE: &str = "fsfork [--no-ignore] [--print] [-n name] [dir [fork]]";
 
 /// Fork a directory: make a copy-on-write clone of it, and start a shell there
 /// or, if not on a terminal, print where it is.
@@ -39,22 +42,31 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let args: Args = argh::from_env();
+    let args: Args = match message::parse(USAGE, 1) {
+        Ok(args) => args,
+        Err(code) => return code,
+    };
     // A shell needs both: with stdout captured, as in `cd $(fsfork)`, the
     // path is wanted, and with stdin not a terminal, a shell would run what
     // it reads from there as commands.
     let shell = !args.print && io::stdin().is_terminal() && io::stdout().is_terminal();
-    let forked = fsfork(args).and_then(|fork| {
-        if shell {
-            start_shell(&fork)
-        } else {
-            print(fork)
+    let fork = match fsfork(args) {
+        Ok(fork) => fork,
+        Err(Wrong::Usage(problem)) => return message::usage_error(problem, USAGE, 1),
+        Err(Wrong::Failed(e)) => {
+            message::say(message::describe(&e));
+            return ExitCode::FAILURE;
         }
-    });
-    match forked {
+    };
+    let done = if shell {
+        start_shell(&fork)
+    } else {
+        print(fork)
+    };
+    match done {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("fsfork: {e}");
+            message::say(message::describe(&e));
             ExitCode::FAILURE
         }
     }
@@ -79,9 +91,9 @@ fn start_shell(fork: &Path) -> io::Result<()> {
         .env("PWD", &fork)
         .exec();
     if let Err(e) = fsfork::remove(&fork) {
-        eprintln!("fsfork: {e}");
+        message::say(message::describe(&e));
     }
-    Err(io::Error::other(format!("{shell}: {e}")))
+    Err(fsfork::at(Path::new(&shell), e))
 }
 
 /// Tells the terminal, on stdout, that its working directory is `dir`, with
@@ -117,24 +129,29 @@ fn hostname() -> String {
     String::from_utf8_lossy(&name[..len]).into_owned()
 }
 
+/// Why the directory was not forked.
+enum Wrong {
+    /// The arguments were not right, for this reason.
+    Usage(&'static str),
+    /// Forking it failed.
+    Failed(io::Error),
+}
+
 /// Forks the directory `args` give, and returns where the fork is.
-fn fsfork(args: Args) -> io::Result<PathBuf> {
+fn fsfork(args: Args) -> Result<PathBuf, Wrong> {
     let contents = if args.no_ignore {
         Contents::Everything
     } else {
         Contents::NotIgnored
     };
-    match (&args.name, &args.paths[..]) {
+    let forked = match (&args.name, &args.paths[..]) {
         (None, []) => fsfork::fork(Path::new("."), contents),
         (None, [dir]) => fsfork::fork(dir, contents),
         (None, [dir, fork]) => fsfork::fork_to(dir, fork, contents),
         (Some(name), []) => fsfork::fork_named(Path::new("."), OsStr::new(name), contents),
         (Some(name), [dir]) => fsfork::fork_named(dir, OsStr::new(name), contents),
-        (Some(_), [_, _]) => Err(io::Error::other(
-            "--name names the fork next to the directory, and a second argument says where to put it; give one or the other",
-        )),
-        _ => Err(io::Error::other(
-            "too many arguments: a directory, and a fork",
-        )),
-    }
+        (Some(_), [_, _]) => return Err(Wrong::Usage("-n cannot be given with a fork")),
+        _ => return Err(Wrong::Usage("too many arguments")),
+    };
+    forked.map_err(Wrong::Failed)
 }

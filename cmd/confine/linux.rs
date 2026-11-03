@@ -96,7 +96,7 @@ pub fn confine(
     };
     if abi < MIN_ABI {
         return Err(io::Error::other(
-            "confine needs Landlock, in Linux 5.19 or later, enabled",
+            "Landlock is not available; it needs Linux 5.19 or later",
         ));
     }
     let mut handled = READ | WRITE;
