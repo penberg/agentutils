@@ -543,8 +543,13 @@ fn lists_the_forks_with_what_changed_in_each() {
         assert!(out.status.success(), "{}", stderr(&out));
         assert_eq!(stderr(&out), "");
         let listed = stdout(&out);
+        let header = listed.lines().next().unwrap();
+        assert!(header.starts_with("FORK "), "{listed}");
+        assert!(header.contains("   UPDATED   "), "{listed}");
+        assert!(header.ends_with("   STATUS"), "{listed}");
         let mut lines: Vec<(&str, &str)> = listed
             .lines()
+            .skip(1)
             .map(|line| {
                 let (path, rest) = line.split_once("  ").unwrap();
                 let state = rest.trim_start().split_once("  ").unwrap().1.trim_start();
@@ -648,7 +653,7 @@ fn lists_nothing_if_there_are_no_forks() {
     let dir = world.project();
     let out = fsfork(&dir, &["-l"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "");
+    assert_eq!(stdout(&out), "FORK   UPDATED   STATUS\n");
     assert_fails(
         &fsfork(&world.dir, &["-l", "missing"]),
         "missing: no such file",

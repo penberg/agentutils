@@ -49,10 +49,11 @@ tell which to remove:
 
 ```
 $ fsfork -l
-../turso.1         4 days ago     unchanged
-../turso.3         1 day ago      15 files changed, 6 applied
-../.turso.2.base   2 hours ago    base left over, with no fork
-../turso.swebench  9 minutes ago  applied
+FORK                UPDATED         STATUS
+../turso.1          4 days ago      unchanged
+../turso.3          1 day ago       15 files changed, 6 applied
+../.turso.2.base    2 hours ago     base left over, with no fork
+../turso.swebench   9 minutes ago   applied
 ```
 
 `fsfork --prune` removes those done with: the forks that are unchanged or

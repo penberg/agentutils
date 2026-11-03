@@ -62,14 +62,14 @@ impl Looked {
     }
 }
 
-/// Lists the forks of `dir`, those left alone longest first, and returns
-/// whether all could be looked into.
+/// Lists the forks of `dir`, under a header, those left alone longest first,
+/// and returns whether all could be looked into.
 pub fn list(dir: &Path) -> io::Result<bool> {
     let (forks, all) = look(dir)?;
     let now = SystemTime::now();
-    let rows: Vec<_> = forks
-        .iter()
-        .map(|fork| row(fork, now, &fork.state))
+    let header = ["FORK", "UPDATED", "STATUS"].map(String::from);
+    let rows: Vec<_> = std::iter::once(header)
+        .chain(forks.iter().map(|fork| row(fork, now, &fork.state)))
         .collect();
     print(&rows)?;
     Ok(all)
@@ -279,7 +279,8 @@ fn row(fork: &Looked, now: SystemTime, what: &dyn fmt::Display) -> [String; 3] {
     ]
 }
 
-/// Prints `rows` on stdout, in columns as wide as the widest of each.
+/// Prints `rows` on stdout, in columns as wide as the widest of each, and
+/// three spaces apart.
 fn print<const N: usize>(rows: &[[String; N]]) -> io::Result<()> {
     let mut widths = [0; N];
     for row in rows {
@@ -294,7 +295,7 @@ fn print<const N: usize>(rows: &[[String; N]]) -> io::Result<()> {
             if i + 1 == N {
                 line.push_str(column);
             } else {
-                line.push_str(&format!("{column:width$}  "));
+                line.push_str(&format!("{column:width$}   "));
             }
         }
         writeln!(out, "{line}")?;
