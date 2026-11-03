@@ -25,8 +25,9 @@ enum State {
     Unchanged,
     /// Something did, and the directory has it all now.
     Applied,
-    /// `files` changed in it, of which the directory has `applied` now.
-    Changed { files: usize, applied: usize },
+    /// Something did, and the directory does not have the changes to
+    /// `files` of the files.
+    NotApplied { files: usize },
     /// The fork is gone, and its base is not.
     LeftOver,
     /// It could not be compared with its base.
@@ -38,16 +39,10 @@ impl fmt::Display for State {
         match self {
             State::Unchanged => f.write_str("unchanged"),
             State::Applied => f.write_str("applied"),
-            State::Changed { files, applied } => {
-                let s = if *files == 1 { "" } else { "s" };
-                write!(f, "{files} file{s} changed")?;
-                if *applied > 0 {
-                    write!(f, ", {applied} applied")?;
-                }
-                Ok(())
-            }
-            State::LeftOver => f.write_str("base left over, with no fork"),
-            State::Unknown => f.write_str("cannot be compared with its base"),
+            State::NotApplied { files: 1 } => f.write_str("1 file not applied"),
+            State::NotApplied { files } => write!(f, "{files} files not applied"),
+            State::LeftOver => f.write_str("base only"),
+            State::Unknown => f.write_str("unknown"),
         }
     }
 }
@@ -107,7 +102,7 @@ pub fn prune(dir: &Path) -> io::Result<bool> {
     let mut out = io::stdout().lock();
     for fork in &forks {
         let why = match fork.state {
-            State::Changed { .. } => Some(Kept::Changed),
+            State::NotApplied { .. } => Some(Kept::NotApplied),
             State::Unknown => Some(Kept::NotCompared),
             _ if now.duration_since(fork.touched).unwrap_or_default() < long_enough => {
                 Some(Kept::Recent)
@@ -147,7 +142,7 @@ pub fn prune(dir: &Path) -> io::Result<bool> {
 #[derive(Clone, Copy)]
 enum Kept {
     /// It has changes the directory does not.
-    Changed,
+    NotApplied,
     /// It was left alone too little.
     Recent,
     /// The working directory is in it.
@@ -161,17 +156,17 @@ enum Kept {
 impl Kept {
     /// Every reason, in the order they are said.
     const ALL: [Kept; 5] = [
-        Kept::Changed,
+        Kept::NotApplied,
         Kept::Recent,
         Kept::InUse,
         Kept::NotCompared,
         Kept::NotRemoved,
     ];
 
-    /// What is said of those kept for this reason, as in "2 changed".
+    /// What is said of those kept for this reason, as in "2 not applied".
     fn word(self) -> &'static str {
         match self {
-            Kept::Changed => "changed",
+            Kept::NotApplied => "not applied",
             Kept::Recent => "recent",
             Kept::InUse => "in use",
             Kept::NotCompared => "not compared",
@@ -251,14 +246,18 @@ fn state(repo: &git::Repo, dir: &Path, fork: &Found) -> io::Result<(State, Syste
     if repo.applied(&before, &after, None, dir)? {
         return Ok((State::Applied, touched));
     }
-    let mut applied = 0;
+    let mut files = 0;
     for path in &changed {
-        if repo.applied(&before, &after, Some(path), dir)? {
-            applied += 1;
+        if !repo.applied(&before, &after, Some(path), dir)? {
+            files += 1;
         }
     }
-    let files = changed.len();
-    Ok((State::Changed { files, applied }, touched))
+    // Each file's changes may be there without the whole patch undoing.
+    let state = match files {
+        0 => State::Applied,
+        files => State::NotApplied { files },
+    };
+    Ok((state, touched))
 }
 
 /// When `path` in `fork` was last changed, or if it is gone, the directory

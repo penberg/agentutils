@@ -125,17 +125,22 @@ as it would once applied there, even if
 .I dir
 changed after.
 .TP
-.IB n " files changed" "\fR, \fPm applied"
+.IB n " files not applied"
+Something changed in it, and
+.I dir
+does not have the changes to
 .I n
-files changed in it, of which
-.IR dir ,
-if
-.I m
-is given, has the changes to
-.IR m .
+of the files:
+.B fsdiff \-\-stat
+shows them all.
 .TP
-.B base left over, with no fork
+.B base only
 The fork is gone, and its base is not.
+.TP
+.B unknown
+It could not be compared with its base, as
+.B fsfork
+says on standard error.
 .PP
 Those left alone longest come first.
 Forks made elsewhere, with
@@ -157,8 +162,8 @@ It keeps the others, and any the working directory is in.
 It says on standard output each it removed, as
 .BR "removed ../turso.1" ,
 and then, on standard error, how many it kept, and why, as
-.BR "fsfork: kept 2 changed, 3 recent" :
-.B changed
+.BR "fsfork: kept 2 not applied, 3 recent" :
+.B not applied
 for those with changes
 .I dir
 does not have,

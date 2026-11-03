@@ -51,8 +51,8 @@ tell which to remove:
 $ fsfork -l
 FORK                UPDATED         STATUS
 ../turso.1          4 days ago      unchanged
-../turso.3          1 day ago       15 files changed, 6 applied
-../.turso.2.base    2 hours ago     base left over, with no fork
+../turso.3          1 day ago       9 files not applied
+../.turso.2.base    2 hours ago     base only
 ../turso.swebench   9 minutes ago   applied
 ```
 
