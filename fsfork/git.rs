@@ -1,11 +1,11 @@
-//! Git, as `fsdiff` uses it: to record two directories as trees, and to show
-//! the difference between them.
+//! Git, as `fsdiff` and `fsfork -l` use it: to record two directories as
+//! trees, and to show the difference between them.
 //!
 //! Git never uses a repository in either directory, whose configuration could
 //! make it run any command, as the command that changed the fork could have
-//! changed it. The trees are recorded in a repository of `fsdiff`'s own, made
-//! in the temporary directory and removed after, by git with no configuration
-//! but its defaults.
+//! changed it. The trees are recorded in a repository of the command's own,
+//! made in the temporary directory and removed after, by git with no
+//! configuration but its defaults.
 
 use std::{
     env, fs, io,
@@ -14,9 +14,9 @@ use std::{
     process::{self, Command, ExitStatus},
 };
 
-use fsfork::message::shown;
+use crate::message::{self, shown};
 
-/// The signals from the terminal, which `fsdiff` ignores and git does not.
+/// The signals from the terminal, which the caller ignores and git does not.
 pub const SIGNALS: [i32; 3] = [libc::SIGINT, libc::SIGQUIT, libc::SIGHUP];
 
 /// The variables that would point git at another repository than the one it
@@ -30,7 +30,7 @@ const REPOSITORY: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-/// A repository of `fsdiff`'s own, removed when dropped.
+/// A repository of the command's own, removed when dropped.
 pub struct Repo {
     dir: PathBuf,
 }
@@ -41,7 +41,7 @@ impl Repo {
         let tmp = env::temp_dir();
         let mut n = 0;
         let dir = loop {
-            let dir = tmp.join(format!("fsdiff.{}.{n}", process::id()));
+            let dir = tmp.join(format!("{}.{}.{n}", message::prog(), process::id()));
             match fs::create_dir(&dir) {
                 Ok(()) => break dir,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => n += 1,
@@ -160,7 +160,7 @@ fn bare() -> Command {
     git
 }
 
-/// Runs `command`, with the terminal's signals, which `fsdiff` ignores, as
+/// Runs `command`, with the terminal's signals, which the caller ignores, as
 /// they are by default, and waits for it to exit.
 fn status(command: &mut Command) -> io::Result<ExitStatus> {
     unsafe {

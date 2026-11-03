@@ -4,6 +4,7 @@
 
 #[cfg(target_os = "macos")]
 mod darwin;
+pub mod git;
 mod ignored;
 #[cfg(target_os = "linux")]
 mod linux;

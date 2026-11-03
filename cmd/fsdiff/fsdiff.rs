@@ -1,8 +1,6 @@
 //! `fsdiff` shows what changed in a fork since it was made, as a patch: the
 //! difference between the fork and its base, which `fsfork` made next to it.
 
-mod git;
-
 use std::{
     io,
     path::{Path, PathBuf},
@@ -10,7 +8,7 @@ use std::{
 };
 
 use argh::FromArgs;
-use fsfork::{at, message};
+use fsfork::{at, git, message};
 
 /// How to give the arguments, as in the man page, a line for each form.
 const USAGE: &str = "fsdiff [--stat] [fork]\nfsdiff [--stat] old new";
