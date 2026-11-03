@@ -21,6 +21,9 @@ shell
 or
 .I /bin/sh
 if unset) in the fork; exit the shell to come back.
+It tells the terminal that the fork is the working directory, as a shell
+does, so that a new tab or window opens there, even if the terminal has
+given only the shell it started a way to say so, as Ghostty does.
 If standard input or standard output is not a terminal, or with
 .BR \-\-print ,
 it prints the fork's path instead, and nothing else, so that

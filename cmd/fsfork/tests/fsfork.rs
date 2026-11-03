@@ -24,7 +24,10 @@ fn on_a_terminal_starts_a_shell_in_the_fork() {
     let fork = world.path("project.1");
     let pwd = world.path("pwd");
 
-    let typed = format!("pwd -P > {}; exit 7\n", pwd.display());
+    let typed = format!(
+        "pwd -P > {0}; echo \"$PWD\" >> {0}; exit 7\n",
+        pwd.display()
+    );
     let on = Terminal {
         stdin: true,
         stdout: true,
@@ -32,13 +35,23 @@ fn on_a_terminal_starts_a_shell_in_the_fork() {
     let (out, screen) = fsfork_on_terminal(&dir, &[], on, "/bin/sh", &typed);
 
     assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
-    assert_eq!(read(&world.dir, "pwd"), format!("{}\n", fork.display()));
+    assert_eq!(
+        read(&world.dir, "pwd"),
+        format!("{0}\n{0}\n", fork.display())
+    );
     assert!(
         stderr(&out).contains(&format!("forked to {},", fork.display())),
         "{}",
         stderr(&out)
     );
-    assert!(!screen.contains("project.1"), "{screen}");
+    // It tells the terminal the fork is the working directory, so that a new
+    // tab opens there, and prints its path nowhere else on the terminal.
+    let osc = format!("\x1b]7;file://{}{}\x07", hostname(), fork.display());
+    assert!(screen.contains(&osc), "{screen:?}");
+    assert!(
+        !screen.replacen(&osc, "", 1).contains("project.1"),
+        "{screen}"
+    );
     assert_eq!(read(&fork, "a"), "one\n");
     assert!(world.path(".project.1.base").is_dir());
 }
@@ -585,6 +598,15 @@ fn fsfork_on_terminal(
     });
     let out = child.wait_with_output().unwrap();
     (out, screen.join().unwrap())
+}
+
+/// The host's name, as `fsfork` tells the terminal it.
+fn hostname() -> String {
+    let mut name = [0u8; 256];
+    let got = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) };
+    assert_eq!(got, 0, "gethostname failed");
+    let len = name.iter().position(|&b| b == 0).unwrap();
+    String::from_utf8(name[..len].to_vec()).unwrap()
 }
 
 /// A new pseudo-terminal's two ends.

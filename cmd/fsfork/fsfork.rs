@@ -71,12 +71,50 @@ fn print(fork: PathBuf) -> io::Result<()> {
 /// removes the fork, and returns why.
 fn start_shell(fork: &Path) -> io::Result<()> {
     eprintln!("fsfork: forked to {}, exit to come back", fork.display());
+    let fork = fork.canonicalize().unwrap_or_else(|_| fork.to_path_buf());
+    report_cwd(&fork);
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let e = Command::new(&shell).current_dir(fork).exec();
-    if let Err(e) = fsfork::remove(fork) {
+    let e = Command::new(&shell)
+        .current_dir(&fork)
+        .env("PWD", &fork)
+        .exec();
+    if let Err(e) = fsfork::remove(&fork) {
         eprintln!("fsfork: {e}");
     }
     Err(io::Error::other(format!("{shell}: {e}")))
+}
+
+/// Tells the terminal, on stdout, that its working directory is `dir`, with
+/// OSC 7, as a shell does at its prompt, so that a new tab or window opens
+/// there. The terminal may have given only the shell it started a way to say
+/// so, as Ghostty does, so the shell started here may not, and the terminal
+/// would otherwise go by what the last one said: the directory forked. The
+/// shell `fsfork` was started from says again where it is once this one
+/// exits.
+fn report_cwd(dir: &Path) {
+    let mut osc = format!("\x1b]7;file://{}", hostname()).into_bytes();
+    for &b in dir.as_os_str().as_encoded_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            osc.push(b);
+        } else {
+            osc.extend(format!("%{b:02X}").bytes());
+        }
+    }
+    osc.push(b'\x07');
+    // A terminal that cannot be told is no reason not to start the shell.
+    let mut stdout = io::stdout();
+    let _ = stdout.write_all(&osc).and_then(|()| stdout.flush());
+}
+
+/// The host's name, or none if it has none to give.
+fn hostname() -> String {
+    let mut name = [0u8; 256];
+    let got = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) };
+    if got != 0 {
+        return String::new();
+    }
+    let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    String::from_utf8_lossy(&name[..len]).into_owned()
 }
 
 /// Forks the directory `args` give, and returns where the fork is.
