@@ -39,10 +39,9 @@ fn on_a_terminal_starts_a_shell_in_the_fork() {
         read(&world.dir, "pwd"),
         format!("{0}\n{0}\n", fork.display())
     );
-    assert!(
-        stderr(&out).contains(&format!("forked to {},", fork.display())),
-        "{}",
-        stderr(&out)
+    assert_eq!(
+        stderr(&out),
+        format!("fsfork: forked to {}\n", fork.display())
     );
     // It tells the terminal the fork is the working directory, so that a new
     // tab opens there, and prints its path nowhere else on the terminal.

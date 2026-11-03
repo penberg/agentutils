@@ -70,7 +70,7 @@ fn print(fork: PathBuf) -> io::Result<()> {
 /// Runs the shell in `fork`, in place of this process. If it cannot be run,
 /// removes the fork, and returns why.
 fn start_shell(fork: &Path) -> io::Result<()> {
-    eprintln!("fsfork: forked to {}, exit to come back", fork.display());
+    eprintln!("fsfork: forked to {}", fork.display());
     let fork = fork.canonicalize().unwrap_or_else(|_| fork.to_path_buf());
     report_cwd(&fork);
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
