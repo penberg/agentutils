@@ -26,7 +26,7 @@ Type "export PS1='%F{magenta}%1~%f $ ' && clear" Enter
 Sleep 1s
 Show
 
-Type "fsfork wordfreq" Sleep 300ms Enter
+Type "fsfork --print wordfreq" Sleep 300ms Enter
 Sleep 1s
 Type "confine -d wordfreq.1" Sleep 300ms Enter
 Sleep 1s
