@@ -561,9 +561,9 @@ fn lists_the_forks_with_what_changed_in_each() {
         let expected = [
             (at(".project.4.base"), "base only"),
             (at("project.1"), "unchanged"),
-            (at("project.2"), "3 files not applied"),
-            (at("project.3"), "1 file not applied"),
-            (at("project.applied"), "applied"),
+            (at("project.2"), "3 files only here"),
+            (at("project.3"), "1 file only here"),
+            (at("project.applied"), "merged"),
         ];
         let expected: Vec<(&str, &str)> = expected.iter().map(|(p, s)| (p.as_str(), *s)).collect();
         assert_eq!(lines, expected, "{listed}");
@@ -572,7 +572,7 @@ fn lists_the_forks_with_what_changed_in_each() {
 }
 
 #[test]
-fn a_fork_is_applied_if_the_directory_has_its_changes_even_after_more() {
+fn a_fork_is_merged_if_the_directory_has_its_changes_even_after_more() {
     let world = World::new();
     let dir = world.project();
     let lines = |second: &str, last: &str| format!("1\n{second}\n3\n4\n5\n6\n7\n{last}\n");
@@ -591,9 +591,9 @@ fn a_fork_is_applied_if_the_directory_has_its_changes_even_after_more() {
             .to_string()
     };
     write(&dir, "lines", &lines("2", "eight"));
-    assert_eq!(state(), "1 file not applied");
+    assert_eq!(state(), "1 file only here");
     write(&dir, "lines", &lines("two", "eight"));
-    assert_eq!(state(), "applied");
+    assert_eq!(state(), "merged");
 }
 
 #[test]
@@ -618,7 +618,10 @@ fn prunes_the_forks_done_with_and_keeps_the_others() {
         assert!(path.is_dir());
     }
     assert_eq!(stdout(&out), "");
-    assert_eq!(stderr(&out), "fsfork: kept 1 not applied, 4 recent\n");
+    assert_eq!(
+        stderr(&out),
+        "fsfork: kept 1 with work only here, 4 recent\n"
+    );
 
     let out = Command::new(env!("CARGO_BIN_EXE_fsfork"))
         .args(["--prune", "../project"])
@@ -638,7 +641,10 @@ fn prunes_the_forks_done_with_and_keeps_the_others() {
             "removed ../project.3",
         ],
     );
-    assert_eq!(stderr(&out), "fsfork: kept 1 not applied, 1 in use\n");
+    assert_eq!(
+        stderr(&out),
+        "fsfork: kept 1 with work only here, 1 in use\n"
+    );
     assert!(!unchanged.exists() && !world.path(".project.1.base").exists());
     assert!(!applied.exists() && !world.path(".project.3.base").exists());
     assert!(!world.path(".project.4.base").exists());

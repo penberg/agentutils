@@ -31,7 +31,7 @@ struct Args {
     #[argh(switch, short = 'l')]
     list: bool,
 
-    /// remove the forks of the directory that are unchanged or applied, and
+    /// remove the forks of the directory that are unchanged or merged, and
     /// the bases left over from forks removed without them, rather than fork
     /// it
     #[argh(switch)]

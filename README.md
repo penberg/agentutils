@@ -51,13 +51,13 @@ tell which to remove:
 $ fsfork -l
 FORK                UPDATED         STATUS
 ../turso.1          4 days ago      unchanged
-../turso.3          1 day ago       9 files not applied
+../turso.3          1 day ago       9 files only here
 ../.turso.2.base    2 hours ago     base only
-../turso.swebench   9 minutes ago   applied
+../turso.swebench   9 minutes ago   merged
 ```
 
 `fsfork --prune` removes those done with: the forks that are unchanged or
-applied, with their bases, and the bases left over, once each has been left
+merged, with their bases, and the bases left over, once each has been left
 alone for an hour. It says what it removed, and how many it kept, and why.
 
 Each command has a man page: [`fsfork.1`](cmd/fsfork/fsfork.1),

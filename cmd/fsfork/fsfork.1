@@ -114,10 +114,10 @@ Nothing changed in it, as
 .BR fsdiff (1)
 would say.
 .TP
-.B applied
+.B merged
 Something changed in it, and
 .I dir
-has the changes: the patch
+has the changes, so removing it loses nothing: the patch
 .BR fsdiff (1)
 shows would undo in
 .IR dir ,
@@ -125,14 +125,14 @@ as it would once applied there, even if
 .I dir
 changed after.
 .TP
-.IB n " files not applied"
-Something changed in it, and
-.I dir
-does not have the changes to
+.IB n " files only here"
+Something changed in it, and the changes to
 .I n
-of the files:
-.B fsdiff \-\-stat
-shows them all.
+of the files are only in the fork:
+.I dir
+does not have them, and removing the fork loses them.
+.B fsdiff
+shows them, to apply.
 .TP
 .B base only
 The fork is gone, and its base is not.
@@ -154,16 +154,16 @@ it forks nothing, and removes the forks of
 that
 .B \-l
 would list as
-.BR unchanged " or " applied ,
+.BR unchanged " or " merged ,
 with their bases, and the bases left over, if each has been left alone for
 an hour: one just made may have a command starting in it, and one just
-applied may have more to come.
+merged may have more to come.
 It keeps the others, and any the working directory is in.
 It says on standard output each it removed, as
 .BR "removed ../turso.1" ,
 and then, on standard error, how many it kept, and why, as
-.BR "fsfork: kept 2 not applied, 3 recent" :
-.B not applied
+.BR "fsfork: kept 2 with work only here, 3 recent" :
+.B with work only here
 for those with changes
 .I dir
 does not have,

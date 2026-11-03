@@ -24,10 +24,10 @@ enum State {
     /// Nothing changed in it.
     Unchanged,
     /// Something did, and the directory has it all now.
-    Applied,
-    /// Something did, and the directory does not have the changes to
-    /// `files` of the files.
-    NotApplied { files: usize },
+    Merged,
+    /// Something did, and the changes to `files` of the files are only
+    /// in the fork: the directory does not have them.
+    OnlyHere { files: usize },
     /// The fork is gone, and its base is not.
     LeftOver,
     /// It could not be compared with its base.
@@ -38,9 +38,9 @@ impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             State::Unchanged => f.write_str("unchanged"),
-            State::Applied => f.write_str("applied"),
-            State::NotApplied { files: 1 } => f.write_str("1 file not applied"),
-            State::NotApplied { files } => write!(f, "{files} files not applied"),
+            State::Merged => f.write_str("merged"),
+            State::OnlyHere { files: 1 } => f.write_str("1 file only here"),
+            State::OnlyHere { files } => write!(f, "{files} files only here"),
             State::LeftOver => f.write_str("base only"),
             State::Unknown => f.write_str("unknown"),
         }
@@ -72,7 +72,7 @@ pub fn list(dir: &Path) -> io::Result<bool> {
 
 /// How long a fork must be left alone for `prune` to remove it: one just
 /// made, with nothing changed in it yet, may have a command starting there,
-/// and one just applied may have more to come.
+/// and one just merged may have more to come.
 const LEFT_ALONE: Duration = Duration::from_secs(60 * 60);
 
 /// How long a fork must be left alone for `prune` to remove it: `LEFT_ALONE`,
@@ -89,7 +89,7 @@ fn left_alone() -> Duration {
     LEFT_ALONE
 }
 
-/// Removes the forks of `dir` that are unchanged or applied and were left
+/// Removes the forks of `dir` that are unchanged or merged and were left
 /// alone long enough, and the bases left over from forks removed without
 /// them, saying on stdout each it removed, and on stderr how many it kept,
 /// and why; and returns whether all could be looked into and removed.
@@ -102,7 +102,7 @@ pub fn prune(dir: &Path) -> io::Result<bool> {
     let mut out = io::stdout().lock();
     for fork in &forks {
         let why = match fork.state {
-            State::NotApplied { .. } => Some(Kept::NotApplied),
+            State::OnlyHere { .. } => Some(Kept::OnlyHere),
             State::Unknown => Some(Kept::NotCompared),
             _ if now.duration_since(fork.touched).unwrap_or_default() < long_enough => {
                 Some(Kept::Recent)
@@ -142,7 +142,7 @@ pub fn prune(dir: &Path) -> io::Result<bool> {
 #[derive(Clone, Copy)]
 enum Kept {
     /// It has changes the directory does not.
-    NotApplied,
+    OnlyHere,
     /// It was left alone too little.
     Recent,
     /// The working directory is in it.
@@ -156,17 +156,18 @@ enum Kept {
 impl Kept {
     /// Every reason, in the order they are said.
     const ALL: [Kept; 5] = [
-        Kept::NotApplied,
+        Kept::OnlyHere,
         Kept::Recent,
         Kept::InUse,
         Kept::NotCompared,
         Kept::NotRemoved,
     ];
 
-    /// What is said of those kept for this reason, as in "2 not applied".
+    /// What is said of those kept for this reason, as in "2 with work only
+    /// here".
     fn word(self) -> &'static str {
         match self {
-            Kept::NotApplied => "not applied",
+            Kept::OnlyHere => "with work only here",
             Kept::Recent => "recent",
             Kept::InUse => "in use",
             Kept::NotCompared => "not compared",
@@ -244,7 +245,7 @@ fn state(repo: &git::Repo, dir: &Path, fork: &Found) -> io::Result<(State, Syste
         .filter_map(|path| modified(&fork.fork, path))
         .fold(made, SystemTime::max);
     if repo.applied(&before, &after, None, dir)? {
-        return Ok((State::Applied, touched));
+        return Ok((State::Merged, touched));
     }
     let mut files = 0;
     for path in &changed {
@@ -254,8 +255,8 @@ fn state(repo: &git::Repo, dir: &Path, fork: &Found) -> io::Result<(State, Syste
     }
     // Each file's changes may be there without the whole patch undoing.
     let state = match files {
-        0 => State::Applied,
-        files => State::NotApplied { files },
+        0 => State::Merged,
+        files => State::OnlyHere { files },
     };
     Ok((state, touched))
 }
