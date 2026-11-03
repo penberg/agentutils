@@ -96,44 +96,88 @@ fn left_alone() -> Duration {
 
 /// Removes the forks of `dir` that are unchanged or applied and were left
 /// alone long enough, and the bases left over from forks removed without
-/// them, saying which it removed and which it kept, and why; and returns
-/// whether all could be looked into and removed.
+/// them, saying on stdout each it removed, and on stderr how many it kept,
+/// and why; and returns whether all could be looked into and removed.
 pub fn prune(dir: &Path) -> io::Result<bool> {
     let (forks, mut all) = look(dir)?;
     let now = SystemTime::now();
     let cwd = env::current_dir().and_then(|cwd| cwd.canonicalize()).ok();
     let long_enough = left_alone();
-    let mut rows = Vec::new();
+    let mut kept = [0; Kept::ALL.len()];
+    let mut out = io::stdout().lock();
     for fork in &forks {
-        let done = matches!(
-            fork.state,
-            State::Unchanged | State::Applied | State::LeftOver
-        );
-        let left_alone = now.duration_since(fork.touched).unwrap_or_default() >= long_enough;
-        let here = cwd.as_ref().is_some_and(|cwd| cwd.starts_with(fork.path()));
-        let kept_because = if !done {
-            None
-        } else if !left_alone {
-            Some("but left alone less than an hour")
-        } else if here {
-            Some("but the working directory is in it")
-        } else if let Err(e) = remove(fork) {
-            message::say(message::describe(&e));
-            all = false;
-            Some("but cannot be removed")
-        } else {
-            let [path, age, state] = row(fork, now, &fork.state);
-            rows.push(["removed".to_string(), path, age, state]);
-            continue;
+        let why = match fork.state {
+            State::Changed { .. } => Some(Kept::Changed),
+            State::Unknown => Some(Kept::NotCompared),
+            _ if now.duration_since(fork.touched).unwrap_or_default() < long_enough => {
+                Some(Kept::Recent)
+            }
+            _ if cwd.as_ref().is_some_and(|cwd| cwd.starts_with(fork.path())) => Some(Kept::InUse),
+            _ => match remove(fork) {
+                Ok(()) => {
+                    let path = message::shown(fork.path());
+                    writeln!(out, "removed {}", path.display())?;
+                    None
+                }
+                Err(e) => {
+                    message::say(message::describe(&e));
+                    all = false;
+                    Some(Kept::NotRemoved)
+                }
+            },
         };
-        let [path, age, state] = match kept_because {
-            Some(why) => row(fork, now, &format!("{}, {why}", fork.state)),
-            None => row(fork, now, &fork.state),
-        };
-        rows.push(["kept".to_string(), path, age, state]);
+        if let Some(why) = why {
+            kept[why as usize] += 1;
+        }
     }
-    print(&rows)?;
+    out.flush()?;
+    let kept: Vec<String> = Kept::ALL
+        .iter()
+        .zip(kept)
+        .filter(|(_, n)| *n > 0)
+        .map(|(why, n)| format!("{n} {}", why.word()))
+        .collect();
+    if !kept.is_empty() {
+        message::say(format!("kept {}", kept.join(", ")));
+    }
     Ok(all)
+}
+
+/// Why `prune` kept a fork.
+#[derive(Clone, Copy)]
+enum Kept {
+    /// It has changes the directory does not.
+    Changed,
+    /// It was left alone too little.
+    Recent,
+    /// The working directory is in it.
+    InUse,
+    /// It could not be compared with its base.
+    NotCompared,
+    /// Removing it failed.
+    NotRemoved,
+}
+
+impl Kept {
+    /// Every reason, in the order they are said.
+    const ALL: [Kept; 5] = [
+        Kept::Changed,
+        Kept::Recent,
+        Kept::InUse,
+        Kept::NotCompared,
+        Kept::NotRemoved,
+    ];
+
+    /// What is said of those kept for this reason, as in "2 changed".
+    fn word(self) -> &'static str {
+        match self {
+            Kept::Changed => "changed",
+            Kept::Recent => "recent",
+            Kept::InUse => "in use",
+            Kept::NotCompared => "not compared",
+            Kept::NotRemoved => "not removed",
+        }
+    }
 }
 
 /// Removes `fork`, and its base.

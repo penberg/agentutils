@@ -57,7 +57,7 @@ $ fsfork -l
 
 `fsfork --prune` removes those done with: the forks that are unchanged or
 applied, with their bases, and the bases left over, once each has been left
-alone for an hour. It keeps the others, and says why.
+alone for an hour. It says what it removed, and how many it kept, and why.
 
 Each command has a man page: [`fsfork.1`](cmd/fsfork/fsfork.1),
 [`confine.1`](cmd/confine/confine.1), and [`fsdiff.1`](cmd/fsdiff/fsdiff.1)

@@ -152,13 +152,18 @@ with their bases, and the bases left over, if each has been left alone for
 an hour: one just made may have a command starting in it, and one just
 applied may have more to come.
 It keeps the others, and any the working directory is in.
-A line for each says
-.B removed
-or
-.BR kept ,
-and then what
-.B \-l
-would, with why it was kept, if it would have been removed otherwise.
+It says on standard output each it removed, as
+.BR "removed ../turso.1" ,
+and then, on standard error, how many it kept, and why, as
+.BR "fsfork: kept 2 changed, 3 recent" :
+.B changed
+for those with changes
+.I dir
+does not have,
+.B recent
+for those left alone less than an hour, and
+.B in use
+for those the working directory is in.
 .B \-l
 shows what
 .B \-\-prune

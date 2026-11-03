@@ -612,7 +612,8 @@ fn prunes_the_forks_done_with_and_keeps_the_others() {
     for path in [&unchanged, &changed, &applied, &working] {
         assert!(path.is_dir());
     }
-    assert!(stdout(&out).contains("unchanged, but left alone less than an hour"));
+    assert_eq!(stdout(&out), "");
+    assert_eq!(stderr(&out), "fsfork: kept 1 changed, 4 recent\n");
 
     let out = Command::new(env!("CARGO_BIN_EXE_fsfork"))
         .args(["--prune", "../project"])
@@ -621,32 +622,18 @@ fn prunes_the_forks_done_with_and_keeps_the_others() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    let mut lines: Vec<Vec<String>> = stdout(&out)
-        .lines()
-        .map(|line| {
-            let mut columns = line.split("  ").filter(|c| !c.is_empty());
-            let (done, path) = (columns.next().unwrap(), columns.next().unwrap());
-            let state = columns.last().unwrap().trim();
-            vec![done.trim().into(), path.trim().into(), state.into()]
-        })
-        .collect();
-    lines.sort_by(|a, b| a[1].cmp(&b[1]));
-    let expected = [
-        ["kept", ".", "unchanged, but the working directory is in it"],
+    let listed = stdout(&out);
+    let mut removed: Vec<&str> = listed.lines().collect();
+    removed.sort();
+    assert_eq!(
+        removed,
         [
-            "removed",
-            "../.project.4.base",
-            "base left over, with no fork",
+            "removed ../.project.4.base",
+            "removed ../project.1",
+            "removed ../project.3",
         ],
-        ["removed", "../project.1", "unchanged"],
-        ["kept", "../project.2", "1 file changed"],
-        ["removed", "../project.3", "applied"],
-    ];
-    let expected: Vec<Vec<String>> = expected
-        .iter()
-        .map(|row| row.iter().map(|c| c.to_string()).collect())
-        .collect();
-    assert_eq!(lines, expected, "{}", stdout(&out));
+    );
+    assert_eq!(stderr(&out), "fsfork: kept 1 changed, 1 in use\n");
     assert!(!unchanged.exists() && !world.path(".project.1.base").exists());
     assert!(!applied.exists() && !world.path(".project.3.base").exists());
     assert!(!world.path(".project.4.base").exists());
