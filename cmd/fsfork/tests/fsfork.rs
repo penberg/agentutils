@@ -39,8 +39,11 @@ fn on_a_terminal_starts_a_shell_in_the_fork() {
         read(&world.dir, "pwd"),
         format!("{0}\n{0}\n", fork.display())
     );
-    assert!(
-        stderr(&out).contains(&format!("forked to {},", fork.display())),
+    // fsfork says one line before the shell starts; what follows is the
+    // shell's own, such as dash's "can't access tty" on Linux.
+    assert_eq!(
+        stderr(&out).lines().next(),
+        Some(format!("fsfork: forked to {}", fork.display()).as_str()),
         "{}",
         stderr(&out)
     );
