@@ -1,7 +1,8 @@
 //! `fsfork` forks a directory: it makes a copy-on-write clone of it, the
 //! fork, and another, the base, which keeps what the directory was when it
 //! was forked, for `fsdiff` to compare the fork with. With `-l`, it lists
-//! the forks of a directory instead.
+//! the forks of a directory instead, and with `--prune`, removes those done
+//! with.
 
 mod forks;
 
@@ -18,7 +19,8 @@ use argh::FromArgs;
 use fsfork::{Contents, message};
 
 /// How to give the arguments, as in the man page, a line for each form.
-const USAGE: &str = "fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\nfsfork -l [dir]";
+const USAGE: &str =
+    "fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\nfsfork -l [dir]\nfsfork --prune [dir]";
 
 /// Fork a directory: make a copy-on-write clone of it, and start a shell there
 /// or, if not on a terminal, print where it is.
@@ -28,6 +30,12 @@ struct Args {
     /// alone and what changed in it, rather than fork it
     #[argh(switch, short = 'l')]
     list: bool,
+
+    /// remove the forks of the directory that are unchanged or applied, and
+    /// the bases left over from forks removed without them, rather than fork
+    /// it
+    #[argh(switch)]
+    prune: bool,
 
     /// print where the fork is, rather than start a shell there
     #[argh(switch)]
@@ -54,8 +62,8 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(code) => return code,
     };
-    if args.list {
-        return list(args);
+    if args.list || args.prune {
+        return list_or_prune(args);
     }
     // A shell needs both: with stdout captured, as in `cd $(fsfork)`, the
     // path is wanted, and with stdin not a terminal, a shell would run what
@@ -83,24 +91,32 @@ fn main() -> ExitCode {
     }
 }
 
-/// Lists the forks of the directory `args` give.
-fn list(args: Args) -> ExitCode {
-    let conflict = if args.print {
-        Some("-l cannot be given with --print")
+/// Lists or prunes the forks of the directory `args` give, as they ask.
+fn list_or_prune(args: Args) -> ExitCode {
+    let option = if args.list { "-l" } else { "--prune" };
+    let conflict = if args.list && args.prune {
+        Some("-l cannot be given with --prune".to_string())
+    } else if args.print {
+        Some(format!("{option} cannot be given with --print"))
     } else if args.no_ignore {
-        Some("-l cannot be given with --no-ignore")
+        Some(format!("{option} cannot be given with --no-ignore"))
     } else if args.name.is_some() {
-        Some("-l cannot be given with -n")
+        Some(format!("{option} cannot be given with -n"))
     } else if args.paths.len() > 1 {
-        Some("too many arguments")
+        Some("too many arguments".to_string())
     } else {
         None
     };
     if let Some(problem) = conflict {
-        return message::usage_error(problem, USAGE, 1);
+        return message::usage_error(&problem, USAGE, 1);
     }
     let dir = args.paths.first().map_or(Path::new("."), PathBuf::as_path);
-    match forks::list(dir) {
+    let done = if args.list {
+        forks::list(dir)
+    } else {
+        forks::prune(dir)
+    };
+    match done {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(e) => {

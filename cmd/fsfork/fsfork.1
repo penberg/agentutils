@@ -12,6 +12,9 @@ fsfork \- fork a directory: make a copy-on-write clone of it
 .br
 .B fsfork \-l
 .RI [ dir ]
+.br
+.B fsfork \-\-prune
+.RI [ dir ]
 .SH DESCRIPTION
 .B fsfork
 makes a copy-on-write clone of
@@ -137,6 +140,30 @@ Forks made elsewhere, with
 .I fork
 given, are not listed.
 .PP
+With
+.BR \-\-prune ,
+it forks nothing, and removes the forks of
+.I dir
+that
+.B \-l
+would list as
+.BR unchanged " or " applied ,
+with their bases, and the bases left over, if each has been left alone for
+an hour: one just made may have a command starting in it, and one just
+applied may have more to come.
+It keeps the others, and any the working directory is in.
+A line for each says
+.B removed
+or
+.BR kept ,
+and then what
+.B \-l
+would, with why it was kept, if it would have been removed otherwise.
+.B \-l
+shows what
+.B \-\-prune
+would remove: it asks nothing.
+.PP
 .B fsfork
 goes by
 .I .gitignore
@@ -171,6 +198,11 @@ List the forks of the directory, rather than fork it.
 It cannot be given with the other options or with
 .IR fork .
 .TP
+.B \-\-prune
+Remove the forks of the directory done with, rather than fork it.
+It cannot be given with the other options or with
+.IR fork .
+.TP
 .B \-\-no\-ignore
 Fork what is ignored too, so that builds in the fork start warm.
 Making it takes longer if what is ignored holds many files.
@@ -184,7 +216,10 @@ On a terminal, the status of the shell, or 1, having made neither, if the shell
 cannot be run.
 With
 .BR \-l ,
-0 if every fork was listed with what is in it, and 1 otherwise.
+0 if every fork was listed with what is in it, and 1 otherwise; with
+.BR \-\-prune ,
+0 if every fork was looked into, and each done with removed, and 1
+otherwise.
 .SH EXAMPLES
 Fork the working directory, and work in the fork in a shell of its own:
 .PP
@@ -228,6 +263,12 @@ and remove one:
 .B fsfork \-l turso
 .B rm \-rf turso.1 .turso.1.base
 .fi
+.RE
+.PP
+Remove the forks of the working directory that are done with:
+.PP
+.RS
+.B fsfork \-\-prune
 .RE
 .PP
 Fork the working directory with its build output, and go there:

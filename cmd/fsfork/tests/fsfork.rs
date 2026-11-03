@@ -592,6 +592,70 @@ fn a_fork_is_applied_if_the_directory_has_its_changes_even_after_more() {
 }
 
 #[test]
+fn prunes_the_forks_done_with_and_keeps_the_others() {
+    let world = World::new();
+    let dir = world.project();
+    let fork = || PathBuf::from(stdout(&fsfork(&dir, &[])).trim_end());
+    let unchanged = fork();
+    let changed = fork();
+    write(&changed, "a", "two\n");
+    let applied = fork();
+    write(&applied, "b", "new\n");
+    write(&dir, "b", "new\n");
+    let removed = fork();
+    fs::remove_dir_all(&removed).unwrap();
+    let working = fork();
+
+    // Just made, they may have a command starting in them: none goes.
+    let out = fsfork(&dir, &["--prune"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    for path in [&unchanged, &changed, &applied, &working] {
+        assert!(path.is_dir());
+    }
+    assert!(stdout(&out).contains("unchanged, but left alone less than an hour"));
+
+    let out = Command::new(env!("CARGO_BIN_EXE_fsfork"))
+        .args(["--prune", "../project"])
+        .current_dir(&working)
+        .env("FSFORK_TEST_LEFT_ALONE", "0")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let mut lines: Vec<Vec<String>> = stdout(&out)
+        .lines()
+        .map(|line| {
+            let mut columns = line.split("  ").filter(|c| !c.is_empty());
+            let (done, path) = (columns.next().unwrap(), columns.next().unwrap());
+            let state = columns.last().unwrap().trim();
+            vec![done.trim().into(), path.trim().into(), state.into()]
+        })
+        .collect();
+    lines.sort_by(|a, b| a[1].cmp(&b[1]));
+    let expected = [
+        ["kept", ".", "unchanged, but the working directory is in it"],
+        [
+            "removed",
+            "../.project.4.base",
+            "base left over, with no fork",
+        ],
+        ["removed", "../project.1", "unchanged"],
+        ["kept", "../project.2", "1 file changed"],
+        ["removed", "../project.3", "applied"],
+    ];
+    let expected: Vec<Vec<String>> = expected
+        .iter()
+        .map(|row| row.iter().map(|c| c.to_string()).collect())
+        .collect();
+    assert_eq!(lines, expected, "{}", stdout(&out));
+    assert!(!unchanged.exists() && !world.path(".project.1.base").exists());
+    assert!(!applied.exists() && !world.path(".project.3.base").exists());
+    assert!(!world.path(".project.4.base").exists());
+    assert!(changed.is_dir() && world.path(".project.2.base").is_dir());
+    assert!(working.is_dir() && world.path(".project.5.base").is_dir());
+    assert_eq!(read(&dir, "a"), "one\n");
+}
+
+#[test]
 fn lists_nothing_if_there_are_no_forks() {
     let world = World::new();
     let dir = world.project();
@@ -605,7 +669,7 @@ fn lists_nothing_if_there_are_no_forks() {
 }
 
 #[test]
-fn lists_but_forks_nothing_and_takes_no_options_for_forking() {
+fn lists_and_prunes_but_forks_nothing_and_take_no_options_for_forking() {
     let world = World::new();
     let dir = world.project();
     for args in [
@@ -613,6 +677,10 @@ fn lists_but_forks_nothing_and_takes_no_options_for_forking() {
         &["-l", "--no-ignore"],
         &["-l", "-n", "x"],
         &["-l", ".", "../x"],
+        &["--prune", "--print"],
+        &["--prune", "-n", "x"],
+        &["--prune", ".", "../x"],
+        &["-l", "--prune"],
     ] {
         let out = fsfork(&dir, args);
         assert_fails(&out, "usage: fsfork");
@@ -810,7 +878,8 @@ fn says_what_is_wrong_with_the_arguments_and_how_to_give_them() {
     let world = World::new();
     let dir = world.project();
     let usage = "usage: fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\n       \
-                 fsfork -l [dir]\n";
+                 fsfork -l [dir]\n       \
+                 fsfork --prune [dir]\n";
     let out = fsfork(&dir, &["--bogus"]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(

@@ -1,9 +1,9 @@
 //! The forks of a directory, as `fsfork -l` lists them: with how long each
 //! has been left alone and what changed in it, so that those done with can
-//! be told from those not.
+//! be told from those not; and as `fsfork --prune` removes those done with.
 
 use std::{
-    fmt, fs,
+    env, fmt, fs,
     io::{self, Write},
     path::Path,
     time::{Duration, SystemTime},
@@ -73,6 +73,77 @@ pub fn list(dir: &Path) -> io::Result<bool> {
         .collect();
     print(&rows)?;
     Ok(all)
+}
+
+/// How long a fork must be left alone for `prune` to remove it: one just
+/// made, with nothing changed in it yet, may have a command starting there,
+/// and one just applied may have more to come.
+const LEFT_ALONE: Duration = Duration::from_secs(60 * 60);
+
+/// How long a fork must be left alone for `prune` to remove it: `LEFT_ALONE`,
+/// or in a debug build, for tests, which cannot make a fork older, as many
+/// seconds as `FSFORK_TEST_LEFT_ALONE` says.
+fn left_alone() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(secs) = env::var("FSFORK_TEST_LEFT_ALONE")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+    {
+        return Duration::from_secs(secs);
+    }
+    LEFT_ALONE
+}
+
+/// Removes the forks of `dir` that are unchanged or applied and were left
+/// alone long enough, and the bases left over from forks removed without
+/// them, saying which it removed and which it kept, and why; and returns
+/// whether all could be looked into and removed.
+pub fn prune(dir: &Path) -> io::Result<bool> {
+    let (forks, mut all) = look(dir)?;
+    let now = SystemTime::now();
+    let cwd = env::current_dir().and_then(|cwd| cwd.canonicalize()).ok();
+    let long_enough = left_alone();
+    let mut rows = Vec::new();
+    for fork in &forks {
+        let done = matches!(
+            fork.state,
+            State::Unchanged | State::Applied | State::LeftOver
+        );
+        let left_alone = now.duration_since(fork.touched).unwrap_or_default() >= long_enough;
+        let here = cwd.as_ref().is_some_and(|cwd| cwd.starts_with(fork.path()));
+        let kept_because = if !done {
+            None
+        } else if !left_alone {
+            Some("but left alone less than an hour")
+        } else if here {
+            Some("but the working directory is in it")
+        } else if let Err(e) = remove(fork) {
+            message::say(message::describe(&e));
+            all = false;
+            Some("but cannot be removed")
+        } else {
+            let [path, age, state] = row(fork, now, &fork.state);
+            rows.push(["removed".to_string(), path, age, state]);
+            continue;
+        };
+        let [path, age, state] = match kept_because {
+            Some(why) => row(fork, now, &format!("{}, {why}", fork.state)),
+            None => row(fork, now, &fork.state),
+        };
+        rows.push(["kept".to_string(), path, age, state]);
+    }
+    print(&rows)?;
+    Ok(all)
+}
+
+/// Removes `fork`, and its base.
+fn remove(fork: &Looked) -> io::Result<()> {
+    match fork.state {
+        State::LeftOver => {
+            fs::remove_dir_all(&fork.found.base).map_err(|e| fsfork::at(&fork.found.base, e))
+        }
+        _ => fsfork::remove(&fork.found.fork),
+    }
 }
 
 /// Looks into the forks of `dir`, and returns them, those left alone longest
