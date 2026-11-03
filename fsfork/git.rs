@@ -122,6 +122,42 @@ impl Repo {
             .collect())
     }
 
+    /// Whether `dir` has the changes between the trees `before` and `after`,
+    /// or with `path`, those to it only: whether they could be undone in
+    /// `dir`, as they could if they were applied to it, even if it changed
+    /// after.
+    pub fn applied(
+        &self,
+        before: &str,
+        after: &str,
+        path: Option<&Path>,
+        dir: &Path,
+    ) -> io::Result<bool> {
+        let mut diff = self.git();
+        diff.args(["--literal-pathspecs", "diff", "--binary", "--no-renames"])
+            .args([before, after]);
+        if let Some(path) = path {
+            diff.arg("--").arg(path);
+        }
+        let patch = diff.stderr(process::Stdio::inherit()).output()?;
+        if !patch.status.success() {
+            return Err(io::Error::other("git could not compare the trees"));
+        }
+        let file = self.dir.join("patch");
+        fs::write(&file, &patch.stdout)?;
+        let undone = status(
+            self.git()
+                .arg("--work-tree")
+                .arg(dir)
+                .args(["apply", "--reverse", "--check"])
+                .arg(&file)
+                .current_dir(dir)
+                .stdout(process::Stdio::null())
+                .stderr(process::Stdio::null()),
+        )?;
+        Ok(undone.success())
+    }
+
     /// Records the files in `tree` that git does not ignore as a tree,
     /// keeping the index in `index`, and returns the tree's ID.
     fn snapshot(&self, tree: &Path, index: &Path) -> io::Result<String> {

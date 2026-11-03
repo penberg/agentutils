@@ -567,6 +567,31 @@ fn lists_the_forks_with_what_changed_in_each() {
 }
 
 #[test]
+fn a_fork_is_applied_if_the_directory_has_its_changes_even_after_more() {
+    let world = World::new();
+    let dir = world.project();
+    let lines = |second: &str, last: &str| format!("1\n{second}\n3\n4\n5\n6\n7\n{last}\n");
+    write(&dir, "lines", &lines("2", "8"));
+    let out = fsfork(&dir, &[]);
+    let fork = PathBuf::from(stdout(&out).trim_end());
+    write(&fork, "lines", &lines("two", "8"));
+    let state = || {
+        let out = fsfork(&dir, &["-l"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+            .trim_end()
+            .rsplit("  ")
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    write(&dir, "lines", &lines("2", "eight"));
+    assert_eq!(state(), "1 file changed");
+    write(&dir, "lines", &lines("two", "eight"));
+    assert_eq!(state(), "applied");
+}
+
+#[test]
 fn lists_nothing_if_there_are_no_forks() {
     let world = World::new();
     let dir = world.project();

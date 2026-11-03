@@ -3,7 +3,7 @@
 //! was forked, for `fsdiff` to compare the fork with. With `-l`, it lists
 //! the forks of a directory instead.
 
-mod list;
+mod forks;
 
 use std::{
     env,
@@ -100,7 +100,7 @@ fn list(args: Args) -> ExitCode {
         return message::usage_error(problem, USAGE, 1);
     }
     let dir = args.paths.first().map_or(Path::new("."), PathBuf::as_path);
-    match list::list(dir) {
+    match forks::list(dir) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(e) => {

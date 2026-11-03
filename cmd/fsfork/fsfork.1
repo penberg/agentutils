@@ -112,7 +112,13 @@ would say.
 .B applied
 Something changed in it, and
 .I dir
-has every file that changed as it is in the fork: the changes were applied.
+has the changes: the patch
+.BR fsdiff (1)
+shows would undo in
+.IR dir ,
+as it would once applied there, even if
+.I dir
+changed after.
 .TP
 .IB n " files changed" "\fR, \fPm applied"
 .I n
@@ -120,9 +126,8 @@ files changed in it, of which
 .IR dir ,
 if
 .I m
-is given, has
-.I m
-as they are in the fork.
+is given, has the changes to
+.IR m .
 .TP
 .B base left over, with no fork
 The fork is gone, and its base is not.
