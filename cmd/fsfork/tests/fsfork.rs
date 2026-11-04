@@ -508,6 +508,185 @@ fn fails_for_what_is_not_a_directory() {
     assert_fails(&fsfork(&world.dir, &["a", "b", "c"]), "too many arguments");
 }
 
+#[test]
+fn lists_the_forks_with_what_changed_in_each() {
+    let world = World::new();
+    let dir = world.project();
+    write(&dir, "b", "x\n");
+    let fork = |args: &[&str]| {
+        let out = fsfork(&dir, args);
+        assert!(out.status.success(), "{}", stderr(&out));
+        PathBuf::from(stdout(&out).trim_end())
+    };
+    let unchanged = fork(&[]);
+    let changed = fork(&[]);
+    write(&changed, "a", "two\n");
+    write(&changed, "c", "new\n");
+    fs::remove_file(changed.join("b")).unwrap();
+    let applied = fork(&["-n", "applied"]);
+    write(&applied, "a", "three\n");
+    let partly = fork(&[]);
+    write(&partly, "a", "three\n");
+    write(&partly, "c", "other\n");
+    let removed = fork(&[]);
+    fs::remove_dir_all(&removed).unwrap();
+    write(&dir, "a", "three\n");
+    // Named like a fork, but with no base, it is not one.
+    fs::create_dir(world.path("project.old")).unwrap();
+    assert!(unchanged.ends_with("project.1") && removed.ends_with("project.4"));
+
+    for (cwd, args, prefix) in [
+        (&dir, vec!["-l"], "../"),
+        (&world.dir, vec!["-l", "project"], ""),
+    ] {
+        let out = fsfork(cwd, &args);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(stderr(&out), "");
+        let listed = stdout(&out);
+        let header = listed.lines().next().unwrap();
+        assert!(header.starts_with("FORK "), "{listed}");
+        assert!(header.contains("   UPDATED   "), "{listed}");
+        assert!(header.ends_with("   STATUS"), "{listed}");
+        let mut lines: Vec<(&str, &str)> = listed
+            .lines()
+            .skip(1)
+            .map(|line| {
+                let (path, rest) = line.split_once("  ").unwrap();
+                let state = rest.trim_start().split_once("  ").unwrap().1.trim_start();
+                (path, state)
+            })
+            .collect();
+        lines.sort();
+        let at = |name: &str| format!("{prefix}{name}");
+        let expected = [
+            (at(".project.4.base"), "base only"),
+            (at("project.1"), "unchanged"),
+            (at("project.2"), "3 files only here"),
+            (at("project.3"), "1 file only here"),
+            (at("project.applied"), "merged"),
+        ];
+        let expected: Vec<(&str, &str)> = expected.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        assert_eq!(lines, expected, "{listed}");
+        assert!(listed.contains("just now"), "{listed}");
+    }
+}
+
+#[test]
+fn a_fork_is_merged_if_the_directory_has_its_changes_even_after_more() {
+    let world = World::new();
+    let dir = world.project();
+    let lines = |second: &str, last: &str| format!("1\n{second}\n3\n4\n5\n6\n7\n{last}\n");
+    write(&dir, "lines", &lines("2", "8"));
+    let out = fsfork(&dir, &[]);
+    let fork = PathBuf::from(stdout(&out).trim_end());
+    write(&fork, "lines", &lines("two", "8"));
+    let state = || {
+        let out = fsfork(&dir, &["-l"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+            .trim_end()
+            .rsplit("  ")
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    write(&dir, "lines", &lines("2", "eight"));
+    assert_eq!(state(), "1 file only here");
+    write(&dir, "lines", &lines("two", "eight"));
+    assert_eq!(state(), "merged");
+}
+
+#[test]
+fn prunes_the_forks_done_with_and_keeps_the_others() {
+    let world = World::new();
+    let dir = world.project();
+    let fork = || PathBuf::from(stdout(&fsfork(&dir, &[])).trim_end());
+    let unchanged = fork();
+    let changed = fork();
+    write(&changed, "a", "two\n");
+    let applied = fork();
+    write(&applied, "b", "new\n");
+    write(&dir, "b", "new\n");
+    let removed = fork();
+    fs::remove_dir_all(&removed).unwrap();
+    let working = fork();
+
+    // Just made, they may have a command starting in them: none goes.
+    let out = fsfork(&dir, &["--prune"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    for path in [&unchanged, &changed, &applied, &working] {
+        assert!(path.is_dir());
+    }
+    assert_eq!(stdout(&out), "");
+    assert_eq!(
+        stderr(&out),
+        "fsfork: kept 1 with work only here, 4 recent\n"
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_fsfork"))
+        .args(["--prune", "../project"])
+        .current_dir(&working)
+        .env("FSFORK_TEST_LEFT_ALONE", "0")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listed = stdout(&out);
+    let mut removed: Vec<&str> = listed.lines().collect();
+    removed.sort();
+    assert_eq!(
+        removed,
+        [
+            "removed ../.project.4.base",
+            "removed ../project.1",
+            "removed ../project.3",
+        ],
+    );
+    assert_eq!(
+        stderr(&out),
+        "fsfork: kept 1 with work only here, 1 in use\n"
+    );
+    assert!(!unchanged.exists() && !world.path(".project.1.base").exists());
+    assert!(!applied.exists() && !world.path(".project.3.base").exists());
+    assert!(!world.path(".project.4.base").exists());
+    assert!(changed.is_dir() && world.path(".project.2.base").is_dir());
+    assert!(working.is_dir() && world.path(".project.5.base").is_dir());
+    assert_eq!(read(&dir, "a"), "one\n");
+}
+
+#[test]
+fn lists_nothing_if_there_are_no_forks() {
+    let world = World::new();
+    let dir = world.project();
+    let out = fsfork(&dir, &["-l"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "FORK   UPDATED   STATUS\n");
+    assert_fails(
+        &fsfork(&world.dir, &["-l", "missing"]),
+        "missing: no such file",
+    );
+}
+
+#[test]
+fn lists_and_prunes_but_forks_nothing_and_take_no_options_for_forking() {
+    let world = World::new();
+    let dir = world.project();
+    for args in [
+        &["-l", "--print"][..],
+        &["-l", "--no-ignore"],
+        &["-l", "-n", "x"],
+        &["-l", ".", "../x"],
+        &["--prune", "--print"],
+        &["--prune", "-n", "x"],
+        &["--prune", ".", "../x"],
+        &["-l", "--prune"],
+    ] {
+        let out = fsfork(&dir, args);
+        assert_fails(&out, "usage: fsfork");
+    }
+    assert!(!world.path("project.1").exists());
+    assert!(!world.path("x").exists());
+}
+
 /// A test's world: a directory to make projects and forks in.
 struct World {
     dir: PathBuf,
@@ -696,7 +875,9 @@ fn assert_fails(out: &Output, message: &str) {
 fn says_what_is_wrong_with_the_arguments_and_how_to_give_them() {
     let world = World::new();
     let dir = world.project();
-    let usage = "usage: fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\n";
+    let usage = "usage: fsfork [--no-ignore] [--print] [-n name] [dir [fork]]\n       \
+                 fsfork -l [dir]\n       \
+                 fsfork --prune [dir]\n";
     let out = fsfork(&dir, &["--bogus"]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(

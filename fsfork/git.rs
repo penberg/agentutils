@@ -1,22 +1,24 @@
-//! Git, as `fsdiff` uses it: to record two directories as trees, and to show
-//! the difference between them.
+//! Git, as `fsdiff` and `fsfork -l` use it: to record two directories as
+//! trees, and to show the difference between them.
 //!
 //! Git never uses a repository in either directory, whose configuration could
 //! make it run any command, as the command that changed the fork could have
-//! changed it. The trees are recorded in a repository of `fsdiff`'s own, made
-//! in the temporary directory and removed after, by git with no configuration
-//! but its defaults.
+//! changed it. The trees are recorded in a repository of the command's own,
+//! made in the temporary directory and removed after, by git with no
+//! configuration but its defaults.
 
 use std::{
-    env, fs, io,
-    os::unix::process::CommandExt,
+    env,
+    ffi::OsStr,
+    fs, io,
+    os::unix::{ffi::OsStrExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
 };
 
-use fsfork::message::shown;
+use crate::message::{self, shown};
 
-/// The signals from the terminal, which `fsdiff` ignores and git does not.
+/// The signals from the terminal, which the caller ignores and git does not.
 pub const SIGNALS: [i32; 3] = [libc::SIGINT, libc::SIGQUIT, libc::SIGHUP];
 
 /// The variables that would point git at another repository than the one it
@@ -30,7 +32,7 @@ const REPOSITORY: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-/// A repository of `fsdiff`'s own, removed when dropped.
+/// A repository of the command's own, removed when dropped.
 pub struct Repo {
     dir: PathBuf,
 }
@@ -41,7 +43,7 @@ impl Repo {
         let tmp = env::temp_dir();
         let mut n = 0;
         let dir = loop {
-            let dir = tmp.join(format!("fsdiff.{}.{n}", process::id()));
+            let dir = tmp.join(format!("{}.{}.{n}", message::prog(), process::id()));
             match fs::create_dir(&dir) {
                 Ok(()) => break dir,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => n += 1,
@@ -98,6 +100,62 @@ impl Repo {
             Some(1) => Ok(true),
             _ => Err(io::Error::other("git could not compare the trees")),
         }
+    }
+
+    /// The paths that differ between the trees `before` and `after`, as in
+    /// `diff` but by git with no configuration but its defaults, a rename
+    /// being both of its paths.
+    pub fn changed(&self, before: &str, after: &str) -> io::Result<Vec<PathBuf>> {
+        let listed = self
+            .git()
+            .args(["diff", "--name-only", "--no-renames", "-z", before, after])
+            .stderr(process::Stdio::inherit())
+            .output()?;
+        if !listed.status.success() {
+            return Err(io::Error::other("git could not compare the trees"));
+        }
+        Ok(listed
+            .stdout
+            .split(|&b| b == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(OsStr::from_bytes(path)))
+            .collect())
+    }
+
+    /// Whether `dir` has the changes between the trees `before` and `after`,
+    /// or with `path`, those to it only: whether they could be undone in
+    /// `dir`, as they could if they were applied to it, even if it changed
+    /// after.
+    pub fn applied(
+        &self,
+        before: &str,
+        after: &str,
+        path: Option<&Path>,
+        dir: &Path,
+    ) -> io::Result<bool> {
+        let mut diff = self.git();
+        diff.args(["--literal-pathspecs", "diff", "--binary", "--no-renames"])
+            .args([before, after]);
+        if let Some(path) = path {
+            diff.arg("--").arg(path);
+        }
+        let patch = diff.stderr(process::Stdio::inherit()).output()?;
+        if !patch.status.success() {
+            return Err(io::Error::other("git could not compare the trees"));
+        }
+        let file = self.dir.join("patch");
+        fs::write(&file, &patch.stdout)?;
+        let undone = status(
+            self.git()
+                .arg("--work-tree")
+                .arg(dir)
+                .args(["apply", "--reverse", "--check"])
+                .arg(&file)
+                .current_dir(dir)
+                .stdout(process::Stdio::null())
+                .stderr(process::Stdio::null()),
+        )?;
+        Ok(undone.success())
     }
 
     /// Records the files in `tree` that git does not ignore as a tree,
@@ -160,7 +218,7 @@ fn bare() -> Command {
     git
 }
 
-/// Runs `command`, with the terminal's signals, which `fsdiff` ignores, as
+/// Runs `command`, with the terminal's signals, which the caller ignores, as
 /// they are by default, and waits for it to exit.
 fn status(command: &mut Command) -> io::Result<ExitStatus> {
     unsafe {
