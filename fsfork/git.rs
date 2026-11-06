@@ -122,40 +122,58 @@ impl Repo {
             .collect())
     }
 
-    /// Whether `dir` has the changes between the trees `before` and `after`,
-    /// or with `path`, those to it only: whether they could be undone in
-    /// `dir`, as they could if they were applied to it, even if it changed
-    /// after.
-    pub fn applied(
-        &self,
-        before: &str,
-        after: &str,
-        path: Option<&Path>,
-        dir: &Path,
-    ) -> io::Result<bool> {
-        let mut diff = self.git();
-        diff.args(["--literal-pathspecs", "diff", "--binary", "--no-renames"])
-            .args([before, after]);
-        if let Some(path) = path {
-            diff.arg("--").arg(path);
-        }
-        let patch = diff.stderr(process::Stdio::inherit()).output()?;
+    /// How many of the files changed between the trees `before` and `after`
+    /// have changes that `dir` does not: that could not be undone in `dir`,
+    /// as they could if they were applied to it, even if it changed after.
+    ///
+    /// Git checks every file's changes in one run, saying which file it is
+    /// checking before any error about it, so that the files are told apart
+    /// without reading their paths back from what it says.
+    pub fn unapplied(&self, before: &str, after: &str, dir: &Path) -> io::Result<usize> {
+        let patch = self
+            .git()
+            .args(["diff", "--binary", "--no-renames", before, after])
+            .stderr(process::Stdio::inherit())
+            .output()?;
         if !patch.status.success() {
             return Err(io::Error::other("git could not compare the trees"));
         }
         let file = self.dir.join("patch");
         fs::write(&file, &patch.stdout)?;
-        let undone = status(
+        let checked = output(
             self.git()
                 .arg("--work-tree")
                 .arg(dir)
-                .args(["apply", "--reverse", "--check"])
+                .args(["apply", "--reverse", "--check", "--verbose"])
                 .arg(&file)
                 .current_dir(dir)
-                .stdout(process::Stdio::null())
-                .stderr(process::Stdio::null()),
+                .env("LC_ALL", "C")
+                .env_remove("LANGUAGE")
+                .stdin(process::Stdio::null())
+                .stdout(process::Stdio::null()),
         )?;
-        Ok(undone.success())
+        if checked.status.success() {
+            return Ok(0);
+        }
+        let mut files = 0;
+        let mut checking = false;
+        let mut counted = false;
+        for line in checked.stderr.split(|&b| b == b'\n') {
+            if line.starts_with(b"Checking patch ") {
+                checking = true;
+                counted = false;
+            } else if line.starts_with(b"error: ") && checking && !counted {
+                files += 1;
+                counted = true;
+            }
+        }
+        match (checked.status.code(), files) {
+            (Some(1), 1..) => Ok(files),
+            _ => Err(io::Error::other(format!(
+                "{}: git could not check the changes in it",
+                shown(dir).display()
+            ))),
+        }
     }
 
     /// Records the files in `tree` that git does not ignore as a tree,
@@ -221,6 +239,16 @@ fn bare() -> Command {
 /// Runs `command`, with the terminal's signals, which the caller ignores, as
 /// they are by default, and waits for it to exit.
 fn status(command: &mut Command) -> io::Result<ExitStatus> {
+    with_signals(command).status()
+}
+
+/// Runs `command` as `status` does, and returns what it printed too.
+fn output(command: &mut Command) -> io::Result<process::Output> {
+    with_signals(command).output()
+}
+
+/// `command`, with the terminal's signals restored to their defaults in it.
+fn with_signals(command: &mut Command) -> &mut Command {
     unsafe {
         command.pre_exec(|| {
             for signal in SIGNALS {
@@ -229,5 +257,5 @@ fn status(command: &mut Command) -> io::Result<ExitStatus> {
             Ok(())
         });
     }
-    command.status()
+    command
 }

@@ -244,17 +244,7 @@ fn state(repo: &git::Repo, dir: &Path, fork: &Found) -> io::Result<(State, Syste
         .iter()
         .filter_map(|path| modified(&fork.fork, path))
         .fold(made, SystemTime::max);
-    if repo.applied(&before, &after, None, dir)? {
-        return Ok((State::Merged, touched));
-    }
-    let mut files = 0;
-    for path in &changed {
-        if !repo.applied(&before, &after, Some(path), dir)? {
-            files += 1;
-        }
-    }
-    // Each file's changes may be there without the whole patch undoing.
-    let state = match files {
+    let state = match repo.unapplied(&before, &after, dir)? {
         0 => State::Merged,
         files => State::OnlyHere { files },
     };
