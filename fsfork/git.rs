@@ -8,10 +8,11 @@
 //! configuration but its defaults.
 
 use std::{
+    cell::RefCell,
     env,
     ffi::OsStr,
     fs, io,
-    os::unix::{ffi::OsStrExt, process::CommandExt},
+    os::unix::{ffi::OsStrExt, fs::MetadataExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
 };
@@ -35,6 +36,9 @@ const REPOSITORY: &[&str] = &[
 /// A repository of the command's own, removed when dropped.
 pub struct Repo {
     dir: PathBuf,
+    /// The directory last recorded as `old`, whose files the index of `old`
+    /// says how they were when hashed.
+    indexed: RefCell<Option<PathBuf>>,
 }
 
 impl Repo {
@@ -50,7 +54,10 @@ impl Repo {
                 Err(e) => return Err(e),
             }
         };
-        let repo = Repo { dir };
+        let repo = Repo {
+            dir,
+            indexed: RefCell::new(None),
+        };
         let made = status(bare().args(["init", "--quiet", "--bare"]).arg(&repo.dir))?;
         if !made.success() {
             return Err(io::Error::other("git could not make a repository"));
@@ -66,9 +73,11 @@ impl Repo {
     pub fn record(&self, old: &Path, new: &Path) -> io::Result<(String, String)> {
         let old_index = self.dir.join("old.index");
         let new_index = self.dir.join("new.index");
-        let before = self.snapshot(old, &old_index)?;
+        let last = self.indexed.borrow_mut().take();
+        let before = self.snapshot(old, &old_index, last.as_deref())?;
+        *self.indexed.borrow_mut() = Some(old.to_path_buf());
         fs::copy(&old_index, &new_index)?;
-        let after = self.snapshot(new, &new_index)?;
+        let after = self.snapshot(new, &new_index, Some(old))?;
         Ok((before, after))
     }
 
@@ -177,10 +186,29 @@ impl Repo {
     }
 
     /// Records the files in `tree` that git does not ignore as a tree,
-    /// keeping the index in `index`, and returns the tree's ID.
-    fn snapshot(&self, tree: &Path, index: &Path) -> io::Result<String> {
+    /// keeping the index in `index`, which says how the files in `from` were
+    /// when hashed, if it is not new, and returns the tree's ID.
+    ///
+    /// A file is hashed again only if its size or modification time differs
+    /// from the index's. Its inode and change time are not compared: a fork's
+    /// files are clones of its base's, with new ones but the same times, and
+    /// comparing them would hash every file in every fork and base again.
+    /// Git compares only the whole seconds of the time then, so a file whose
+    /// time differs from `from`'s only within the second is hashed again
+    /// first, comparing all the file's stat, staying in the index so that
+    /// git does not ignore it.
+    fn snapshot(&self, tree: &Path, index: &Path, from: Option<&Path>) -> io::Result<String> {
+        if let Some(from) = from {
+            self.rehash_changed_within_second(tree, index, from)?;
+        }
         let added = status(
             self.git()
+                .args([
+                    "-c",
+                    "core.checkStat=minimal",
+                    "-c",
+                    "core.trustCtime=false",
+                ])
                 .arg("--work-tree")
                 .arg(tree)
                 .args(["add", "--all", "--", "."])
@@ -205,6 +233,67 @@ impl Repo {
             )));
         }
         Ok(String::from_utf8_lossy(&written.stdout).trim().to_string())
+    }
+
+    /// Hashes again into `index` the files in `tree` whose size and whole
+    /// seconds of modification time are those of the same file in `from`, but
+    /// whose time is not.
+    fn rehash_changed_within_second(
+        &self,
+        tree: &Path,
+        index: &Path,
+        from: &Path,
+    ) -> io::Result<()> {
+        let listed = self
+            .git()
+            .args(["ls-files", "-z"])
+            .env("GIT_INDEX_FILE", index)
+            .stderr(process::Stdio::inherit())
+            .output()?;
+        if !listed.status.success() {
+            return Err(io::Error::other("git could not list its index"));
+        }
+        let mut changed = Vec::new();
+        for path in listed.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()) {
+            let path = Path::new(OsStr::from_bytes(path));
+            let (Ok(was), Ok(is)) = (
+                fs::symlink_metadata(from.join(path)),
+                fs::symlink_metadata(tree.join(path)),
+            ) else {
+                continue;
+            };
+            if was.file_type() == is.file_type()
+                && !is.is_dir()
+                && was.size() == is.size()
+                && was.mtime() == is.mtime()
+                && was.mtime_nsec() != is.mtime_nsec()
+            {
+                changed.extend_from_slice(path.as_os_str().as_bytes());
+                changed.push(0);
+            }
+        }
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let file = self.dir.join("rehash");
+        fs::write(&file, &changed)?;
+        let rehashed = status(
+            self.git()
+                .arg("--work-tree")
+                .arg(tree)
+                .args(["update-index", "-z", "--stdin"])
+                .current_dir(tree)
+                .env("GIT_INDEX_FILE", index)
+                .stdin(fs::File::open(&file)?)
+                .stdout(process::Stdio::null()),
+        )?;
+        if !rehashed.success() {
+            return Err(io::Error::other(format!(
+                "{}: git could not read it",
+                shown(tree).display()
+            )));
+        }
+        Ok(())
     }
 
     /// A command that runs git on the repository, as `bare` does.
