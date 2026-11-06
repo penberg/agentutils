@@ -57,17 +57,34 @@ impl Looked {
     }
 }
 
-/// Lists the forks of `dir`, under a header, those left alone longest first,
-/// and returns whether all could be looked into.
+/// Lists the forks of `dir`, under a header, each as soon as it is looked
+/// into, in the order they were made, and returns whether all could be
+/// looked into.
 pub fn list(dir: &Path) -> io::Result<bool> {
-    let (forks, all) = look(dir)?;
     let now = SystemTime::now();
-    let header = ["FORK", "UPDATED", "STATUS"].map(String::from);
-    let rows: Vec<_> = std::iter::once(header)
-        .chain(forks.iter().map(|fork| row(fork, now, &fork.state)))
-        .collect();
-    print(&rows)?;
-    Ok(all)
+    let widths = std::cell::Cell::new([0; 3]);
+    each(
+        dir,
+        |found| {
+            let header = ["FORK", "UPDATED", "STATUS"];
+            let paths = found.iter().map(|found| {
+                let path = if found.left_over {
+                    &found.base
+                } else {
+                    &found.fork
+                };
+                message::shown(path).display().to_string().chars().count()
+            });
+            let age = if found.is_empty() { 0 } else { AGE_WIDTH };
+            widths.set([
+                paths.fold(header[0].len(), usize::max),
+                age.max(header[1].len()),
+                0,
+            ]);
+            print(&header.map(String::from), widths.get())
+        },
+        |fork| print(&row(&fork, now, &fork.state), widths.get()),
+    )
 }
 
 /// How long a fork must be left alone for `prune` to remove it: one just
@@ -189,9 +206,33 @@ fn remove(fork: &Looked) -> io::Result<()> {
 /// Looks into the forks of `dir`, and returns them, those left alone longest
 /// first, and whether all could be looked into, having said why not.
 fn look(dir: &Path) -> io::Result<(Vec<Looked>, bool)> {
-    let found = fsfork::forks(dir)?;
-    if found.is_empty() {
-        return Ok((Vec::new(), true));
+    let mut forks = Vec::new();
+    let all = each(
+        dir,
+        |_| Ok(()),
+        |fork| {
+            forks.push(fork);
+            Ok(())
+        },
+    )?;
+    // Those left alone longest, the likeliest to be done with, first.
+    forks.sort_by_key(|fork| fork.touched);
+    Ok((forks, all))
+}
+
+/// Finds the forks of `dir`, gives them to `found`, even if there are none, and
+/// then looks into each, in the order they were made, giving it to `looked`
+/// as soon as it is; and returns whether all could be looked into, having
+/// said why not.
+fn each(
+    dir: &Path,
+    found: impl FnOnce(&[Found]) -> io::Result<()>,
+    mut looked: impl FnMut(Looked) -> io::Result<()>,
+) -> io::Result<bool> {
+    let forks = fsfork::forks(dir)?;
+    found(&forks)?;
+    if forks.is_empty() {
+        return Ok(true);
     }
     let dir = dir.canonicalize()?;
     // The terminal's signals reach git too, which exits; `fsfork` outlives
@@ -201,9 +242,8 @@ fn look(dir: &Path) -> io::Result<(Vec<Looked>, bool)> {
     }
     let repo = git::Repo::new()?;
     let mut all = true;
-    let mut forks: Vec<Looked> = found
-        .into_iter()
-        .map(|found| match state(&repo, &dir, &found) {
+    for found in forks {
+        let fork = match state(&repo, &dir, &found) {
             Ok((state, touched)) => Looked {
                 found,
                 state,
@@ -219,11 +259,10 @@ fn look(dir: &Path) -> io::Result<(Vec<Looked>, bool)> {
                     touched,
                 }
             }
-        })
-        .collect();
-    // Those left alone longest, the likeliest to be done with, first.
-    forks.sort_by_key(|fork| fork.touched);
-    Ok((forks, all))
+        };
+        looked(fork)?;
+    }
+    Ok(all)
 }
 
 /// What is in `fork`, of `dir`, and when it was last changed, or made, if it
@@ -244,17 +283,7 @@ fn state(repo: &git::Repo, dir: &Path, fork: &Found) -> io::Result<(State, Syste
         .iter()
         .filter_map(|path| modified(&fork.fork, path))
         .fold(made, SystemTime::max);
-    if repo.applied(&before, &after, None, dir)? {
-        return Ok((State::Merged, touched));
-    }
-    let mut files = 0;
-    for path in &changed {
-        if !repo.applied(&before, &after, Some(path), dir)? {
-            files += 1;
-        }
-    }
-    // Each file's changes may be there without the whole patch undoing.
-    let state = match files {
+    let state = match repo.unapplied(&before, &after, dir)? {
         0 => State::Merged,
         files => State::OnlyHere { files },
     };
@@ -279,27 +308,22 @@ fn row(fork: &Looked, now: SystemTime, what: &dyn fmt::Display) -> [String; 3] {
     ]
 }
 
-/// Prints `rows` on stdout, in columns as wide as the widest of each, and
-/// three spaces apart.
-fn print<const N: usize>(rows: &[[String; N]]) -> io::Result<()> {
-    let mut widths = [0; N];
-    for row in rows {
-        for (width, column) in widths.iter_mut().zip(row) {
-            *width = (*width).max(column.chars().count());
+/// The widest `age` says, as in "59 minutes ago", for its column.
+const AGE_WIDTH: usize = 14;
+
+/// Prints `row` on stdout, its columns as wide as `widths` says, but the
+/// last, and three spaces apart, and flushes it, to be seen at once.
+fn print<const N: usize>(row: &[String; N], widths: [usize; N]) -> io::Result<()> {
+    let mut line = String::new();
+    for (i, (column, width)) in row.iter().zip(widths).enumerate() {
+        if i + 1 == N {
+            line.push_str(column);
+        } else {
+            line.push_str(&format!("{column:width$}   "));
         }
     }
     let mut out = io::stdout().lock();
-    for row in rows {
-        let mut line = String::new();
-        for (i, (column, width)) in row.iter().zip(widths).enumerate() {
-            if i + 1 == N {
-                line.push_str(column);
-            } else {
-                line.push_str(&format!("{column:width$}   "));
-            }
-        }
-        writeln!(out, "{line}")?;
-    }
+    writeln!(out, "{line}")?;
     out.flush()
 }
 
