@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command, Output, Stdio},
     ptr, thread,
+    time::{Duration, SystemTime},
 };
 
 #[test]
@@ -255,6 +256,57 @@ fn copies_everything_in_the_directory_as_it_is_with_no_ignore() {
     let mode = fs::metadata(fork.join("run")).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o755);
     assert_eq!(fs::read_link(fork.join("link")).unwrap(), Path::new("a"));
+}
+
+#[test]
+fn copies_fifos_links_and_modification_times_deep_in_the_directory() {
+    let world = World::new();
+    let dir = world.project();
+    write(&dir, "sub/deeper/file", "deep\n");
+    let made = Command::new("mkfifo")
+        .arg(dir.join("sub/deeper/pipe"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    // The path to a socket is limited in length, which the world's exceeds.
+    let short = env::temp_dir().join(format!("fsfork-test-deep.{}", process::id()));
+    symlink(dir.join("sub"), &short).unwrap();
+    let socket = UnixListener::bind(short.join("sock"));
+    fs::remove_file(&short).unwrap();
+    let _socket = socket.unwrap();
+    symlink("nowhere", dir.join("sub/dangling")).unwrap();
+    symlink("nowhere", dir.join("dangling")).unwrap();
+    let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    for sub in ["sub/deeper", "sub"] {
+        File::open(dir.join(sub))
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
+    }
+    let out = fsfork(&dir, &["--no-ignore"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    for tree in [world.path("project.1"), world.path(".project.1.base")] {
+        assert_eq!(read(&tree, "sub/deeper/file"), "deep\n");
+        let pipe = tree.join("sub/deeper/pipe").symlink_metadata().unwrap();
+        assert!(pipe.file_type().is_fifo());
+        assert!(tree.join("sub/sock").symlink_metadata().is_err());
+        for link in ["sub/dangling", "dangling"] {
+            assert_eq!(
+                fs::read_link(tree.join(link)).unwrap(),
+                Path::new("nowhere")
+            );
+        }
+        for sub in ["sub/deeper", "sub"] {
+            let modified = fs::metadata(tree.join(sub)).unwrap().modified().unwrap();
+            assert_eq!(modified, then, "{sub}");
+        }
+    }
+    let mut left: Vec<_> = fs::read_dir(&world.dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    left.sort();
+    assert_eq!(left, [".project.1.base", "project", "project.1"]);
 }
 
 #[test]

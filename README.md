@@ -106,8 +106,10 @@ included, but for what `.gitignore` files ignore and git does not track, such
 as `target` or `node_modules`, so that a large directory is still quick to
 fork. Builds in the fork start cold; with `--no-ignore`, for `fsfork` and
 `confine`, what is ignored is forked too, and they start warm. On macOS, it is
-made with `clonefile`, and on Linux with `cp --reflink`, so it takes no
-space until either side is written to.
+made with `copyfile`, which clones each file, and on Linux with
+`cp --reflink`, so it takes no space until either side is written to. It is
+made file by file, so what is written to the directory while it is forked
+may be in the fork or not, each file by itself.
 
 `fsfork` asks git what is ignored, in a repository of its own, as `fsdiff`
 does, so the directory's configuration cannot make it run anything. If git

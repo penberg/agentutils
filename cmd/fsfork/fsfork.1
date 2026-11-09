@@ -290,18 +290,26 @@ Fork the working directory with its build output, and go there:
 .RE
 .SH CAVEATS
 On macOS, the fork is made with
-.BR clonefile (2),
-which needs APFS, and the fork on the same volume as the directory.
+.BR copyfile (3),
+which clones each file in the directory, rather than with
+.BR clonefile (2)
+on the directory at once, as that holds off every change to the directory
+until it is done, which its manual page strongly discourages.
+It needs APFS to take no space, and the fork on the same volume as the
+directory.
 On Linux, it is made with
 .B cp \-\-reflink=auto
 and takes no space only on a file system that can share blocks between
 files, such as Btrfs or XFS; elsewhere, it is a full copy.
 .PP
+The fork is made file by file, so what is written to the directory while it
+is forked may be in the fork or not, each file by itself.
+.PP
 Hard links in the directory are not hard links in the fork.
 .PP
 A directory with something ignored in it is made anew, with its permissions
-and modification time, but not its other attributes, and on macOS, sockets
-and devices beside what is ignored are left out.
+and modification time, but not its other attributes.
+On macOS, sockets and devices are left out, and FIFOs made anew.
 .PP
 The fork is at another path than the directory, so tools that remember
 absolute paths, such as build caches, may rebuild in it.
@@ -309,4 +317,5 @@ absolute paths, such as build caches, may rebuild in it.
 .BR confine (1),
 .BR fsdiff (1),
 .BR git (1),
-.BR clonefile (2)
+.BR clonefile (2),
+.BR copyfile (3)
