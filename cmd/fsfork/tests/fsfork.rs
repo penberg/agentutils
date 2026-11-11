@@ -289,7 +289,10 @@ fn copies_fifos_links_and_modification_times_deep_in_the_directory() {
         assert_eq!(read(&tree, "sub/deeper/file"), "deep\n");
         let pipe = tree.join("sub/deeper/pipe").symlink_metadata().unwrap();
         assert!(pipe.file_type().is_fifo());
-        assert!(tree.join("sub/sock").symlink_metadata().is_err());
+        // On Linux, `cp -a` makes sockets anew.
+        if cfg!(target_os = "macos") {
+            assert!(tree.join("sub/sock").symlink_metadata().is_err());
+        }
         for link in ["sub/dangling", "dangling"] {
             assert_eq!(
                 fs::read_link(tree.join(link)).unwrap(),
